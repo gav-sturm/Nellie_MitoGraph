@@ -1,80 +1,142 @@
+"""
+GIFGenerator Module
+
+This module provides the GIFGenerator class for creating GIF animations from frame images.
+"""
+
 import os
-import glob
 import numpy as np
-import imageio.v2 as imageio  # Use imageio.v2 to avoid deprecation warnings
-from tqdm import tqdm
+from glob import glob
+import imageio.v2 as imageio
+from imageio.v3 import imwrite as iio_imwrite
 
 class GIFGenerator:
-    def __init__(self, input_folder, pattern="components_frame_*.png",
-                 output_gif="components_all_frames.gif", frame_rate=12):
+    """
+    Creates and manages GIF animations from frame images.
+    
+    This class is responsible for creating GIF animations from frame images,
+    with options for frame rate, loop count, and quality.
+    """
+    
+    def __init__(self, output_dir, frame_pattern="frame_*.png", output_file="animation.gif", frame_rate=5):
         """
         Initialize the GIFGenerator.
-
+        
         Parameters:
-            input_folder (str): Folder containing the frame images.
-            pattern (str): Glob pattern to match frame images.
-            output_gif (str): Name of the output GIF file.
-            frame_rate (float): Frame rate (frames per second) for the GIF.
+        -----------
+        output_dir : str
+            Directory to save the output GIF
+        frame_pattern : str, optional
+            Pattern to match frame files (default: "frame_*.png")
+        output_file : str, optional
+            Filename for the output GIF (default: "animation.gif")
+        frame_rate : int, optional
+            Frame rate in frames per second (default: 5)
         """
-        self.input_folder = input_folder
-        self.pattern = pattern
-        self.output_gif = output_gif
+        self.output_dir = output_dir
+        self.frame_pattern = frame_pattern
+        self.output_file = output_file
         self.frame_rate = frame_rate
-
-    def create_gif(self):
+        
+        # Create output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+    
+    def create_gif_from_files(self, frame_files, duration=None):
         """
-        Create an animated GIF from images in the input folder.
-        All images are padded to have the same dimensions if necessary.
+        Create a GIF animation from a list of frame files.
+        
+        Parameters:
+        -----------
+        frame_files : list
+            List of paths to frame files
+        duration : float, optional
+            Duration of each frame in seconds (default: 1/frame_rate)
+            
+        Returns:
+        --------
+        str
+            Path to the saved GIF file
         """
-        # Build the full file pattern and get the sorted list of images
-        file_pattern = os.path.join(self.input_folder, self.pattern)
-        png_files = sorted(glob.glob(file_pattern),
-                           key=lambda f: int(os.path.splitext(os.path.basename(f))[0].split('_')[-1]))
-
-        if not png_files:
-            print("No frame images found to create GIF.")
-            return
-
-        images = []
-        for filename in png_files:
-            img = imageio.imread(filename)
-            images.append(img)
-
-        # Determine the maximum height and width among all images
-        max_h = max(img.shape[0] for img in images)
-        max_w = max(img.shape[1] for img in images)
-
-        # Pad each image so they all share the same dimensions.
-        padded_images = []
-        for img in tqdm(images):
-            h, w = img.shape[:2]
-            pad_h = max_h - h
-            pad_w = max_w - w
-
-            # For RGB or RGBA images, pad the last dimension with 0 (or 255 for a white background)
-            if img.ndim == 3:
-                pad_width = ((0, pad_h), (0, pad_w), (0, 0))
-                padded = np.pad(img, pad_width, mode='constant', constant_values=255)
+        print(f"Creating GIF animation from {len(frame_files)} frames...")
+        
+        # Set duration from frame rate if not provided
+        if duration is None:
+            duration = 1.0 / self.frame_rate
+        
+        # Load all frames
+        frames = []
+        for filename in frame_files:
+            frames.append(imageio.imread(filename))
+        
+        # Find max dimensions
+        max_h = max(frame.shape[0] for frame in frames)
+        max_w = max(frame.shape[1] for frame in frames)
+        
+        # Pad frames to the same size if needed
+        padded_frames = []
+        for frame in frames:
+            h, w = frame.shape[:2]
+            if h != max_h or w != max_w:
+                pad_h = max_h - h
+                pad_w = max_w - w
+                
+                # Create padding arrays
+                if frame.ndim == 3:  # RGB
+                    pad_width = ((0, pad_h), (0, pad_w), (0, 0))
+                else:  # Grayscale
+                    pad_width = ((0, pad_h), (0, pad_w))
+                
+                # Pad with zeros (black)
+                padded = np.pad(frame, pad_width, mode='constant', constant_values=0)
+                padded_frames.append(padded)
             else:
-                pad_width = ((0, pad_h), (0, pad_w))
-                padded = np.pad(img, pad_width, mode='constant', constant_values=255)
-            padded_images.append(padded)
-
-        # Create the output GIF file path.
-        output_path = os.path.join(self.input_folder, self.output_gif)
-        # Duration (seconds per frame) is the inverse of the frame rate.
-        duration = 1.0 / self.frame_rate
-        # Set loop=0 to loop indefinitely.
-        imageio.mimsave(output_path, padded_images, duration=duration, loop=0)
-        print(f"Saved animated GIF to {output_path}")
-
-
-# Example usage:
-if __name__ == "__main__":
-    # Set the folder where your frame images are stored.
-    global_path = r"C:\Users\gavst\Box\Box-Gdrive\Calico\scripts\2025-02-13_yeast_mitographs\event1_2024-10-22_13-14-25_\crop1_snout\crop1_nellie_out\nellie_necessities"
-    input_folder = os.path.join(global_path, "output_graphs")
-    # Create the GIFGenerator instance.
-    gif_gen = GIFGenerator(input_folder=input_folder, frame_rate=3)
-    # Generate the GIF.
-    gif_gen.create_gif()
+                padded_frames.append(frame)
+        
+        # Create output path
+        output_path = os.path.join(self.output_dir, self.output_file)
+        
+        # Save as GIF with higher quality
+        iio_imwrite(output_path, padded_frames, extension='.gif', plugin='pillow', 
+                   loop=0, duration=duration, optimize=False, quality=95)
+        
+        print(f"GIF animation saved to {output_path}")
+        return output_path
+    
+    def create_gif_from_pattern(self):
+        """
+        Create a GIF animation from files matching the pattern.
+        
+        Returns:
+        --------
+        str
+            Path to the saved GIF file
+        """
+        # Find files matching the pattern
+        frame_files = sorted(glob(os.path.join(self.output_dir, self.frame_pattern)),
+                           key=lambda f: int(os.path.splitext(os.path.basename(f))[0].split('_')[-1]))
+        
+        if not frame_files:
+            print(f"No files found matching pattern: {self.frame_pattern}")
+            return None
+        
+        return self.create_gif_from_files(frame_files)
+    
+    def save_frame(self, image, frame_idx):
+        """
+        Save a frame image.
+        
+        Parameters:
+        -----------
+        image : ndarray
+            Frame image to save
+        frame_idx : int
+            Frame index
+            
+        Returns:
+        --------
+        str
+            Path to the saved frame file
+        """
+        frame_file = os.path.join(self.output_dir, f"frame_{frame_idx:04d}.png")
+        imageio.imwrite(frame_file, image, quality=95)
+        return frame_file
