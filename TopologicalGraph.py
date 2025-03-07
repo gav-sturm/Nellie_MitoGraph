@@ -287,7 +287,7 @@ class TopologicalGraph:
         # Check for any unmapped edge pixels and assign them to the nearest component
         unmapped_edge_pixels = [p for p in all_edge_pixels if p not in pixel_to_component]
         if unmapped_edge_pixels:
-            print(f"Found {len(unmapped_edge_pixels)} unmapped edge pixels. Assigning to nearest component...")
+            # print(f"Found {len(unmapped_edge_pixels)} unmapped edge pixels. Assigning to nearest component...")
             
             # For each unmapped edge pixel, find the nearest mapped pixel
             for pixel in unmapped_edge_pixels:
@@ -321,11 +321,11 @@ class TopologicalGraph:
         self.component_colors = component_colors
         
         # Print some statistics
-        print(f"Graph has {G.number_of_nodes()} nodes and {G.number_of_edges()} edges")
-        print(f"Found {len(components)} connected components")
-        print(f"Mapped {len(pixel_to_node)} pixels to nodes")
-        print(f"Mapped {len(pixel_to_component)} pixels to components")
-        print(f"Mapped {len(pixel_to_color)} pixels to colors")
+        # print(f"Graph has {G.number_of_nodes()} nodes and {G.number_of_edges()} edges")
+        # print(f"Found {len(components)} connected components")
+        # print(f"Mapped {len(pixel_to_node)} pixels to nodes")
+        # print(f"Mapped {len(pixel_to_component)} pixels to components")
+        # print(f"Mapped {len(pixel_to_color)} pixels to colors")
         
         return G, component_to_pixels
     
@@ -535,7 +535,7 @@ class TopologicalGraph:
             # Add to previous components
             self.prev_components.append((comp_idx, global_ids, centroid, size, color))
         
-        print(f"Assigned colors to {len(component_colors)} components")
+        # print(f"Assigned colors to {len(component_colors)} components")
         return component_colors
     
     def _get_node_id(self, coord, G, pixel_class_vol):
@@ -546,10 +546,10 @@ class TopologicalGraph:
                 return node
         return None
 
-    def _capture_topological_graph(self, G, component_colors):
+    def _capture_topological_graph(self, G, component_colors, viewpoint_selector=None):
         """
-        Capture a screenshot of the topological graph with projected layout.
-        Uses enhanced layout to prevent component overlap while keeping them close.
+        Capture a screenshot of the topological graph with node and edge coloring by component.
+        Applies viewpoint transformations directly to the graph positions.
         
         Parameters:
         -----------
@@ -557,6 +557,8 @@ class TopologicalGraph:
             Graph to visualize
         component_colors : dict
             Mapping of component IDs to colors
+        viewpoint_selector : ViewpointSelector, optional
+            ViewpointSelector instance to get transformations from (default: None)
             
         Returns:
         --------
@@ -566,11 +568,21 @@ class TopologicalGraph:
         if G is None or len(G.nodes) == 0:
             return np.zeros((100, 100, 3), dtype=np.uint8)
         
-        # Create a new figure
-        fig, ax = plt.subplots(figsize=(10, 10))
-        
         # Use enhanced layout to prevent component overlap
         pos = self._create_non_overlapping_layout(G)
+        
+        # Apply transformations from viewpoint if available
+        if viewpoint_selector is not None and viewpoint_selector.has_view:
+            # Get the transformations needed to match the 3D viewpoint
+            transformations = viewpoint_selector.determine_2d_transformations()
+            
+            if transformations:
+                # print("Applying transformations to graph positions...")
+                # Apply transformations to the node positions
+                pos = self._apply_transformations_to_positions(pos, transformations)
+        
+        # Create a new figure
+        fig, ax = plt.subplots(figsize=(10, 10))
         
         # Group edges by component for coloring
         component_edge_groups = {}
@@ -610,14 +622,13 @@ class TopologicalGraph:
             nx.draw_networkx_nodes(G, pos, nodelist=nodes_without_component, 
                                   node_color='gray', node_size=self.node_size, alpha=0.8, ax=ax)  # Increased size
         
-        # Add node labels with increased font size
+        # Add node labels
         nx.draw_networkx_labels(G, pos, font_size=self.node_font_size, font_color='black', ax=ax)
         
-        # Remove axis and set tight layout
+        # Remove axis
         ax.axis('off')
-        plt.tight_layout(pad=0)  # Minimize padding
         
-        # Convert the figure to an image
+        # Convert the figure to an image - use a safer approach that works with different backends
         fig.canvas.draw()
         
         # Get the RGBA buffer from the figure canvas
@@ -645,6 +656,78 @@ class TopologicalGraph:
         plt.close(fig)
         
         return img
+
+    def _apply_transformations_to_positions(self, pos, transformations):
+        """
+        Apply 2D transformations to graph node positions.
+        
+        Parameters:
+        -----------
+        pos : dict
+            Dictionary of node positions {node: (x, y)}
+        transformations : list
+            List of transformation operations from determine_2d_transformations()
+            
+        Returns:
+        --------
+        dict
+            Transformed node positions
+        """
+        import numpy as np
+        
+        # Convert positions to numpy arrays
+        pos_array = {node: np.array(position, dtype=float) for node, position in pos.items()}
+        
+        # Get the bounding box of the graph
+        positions = np.array(list(pos_array.values()))
+        min_x, min_y = positions.min(axis=0)
+        max_x, max_y = positions.max(axis=0)
+        
+        # Calculate the center of the graph
+        center_x = (min_x + max_x) / 2
+        center_y = (min_y + max_y) / 2
+        
+        # Apply each transformation in sequence
+        for op, param in transformations:
+            if op == 'rotate':
+                # Convert angle to radians
+                angle_rad = np.radians(param)
+                cos_theta = np.cos(angle_rad)
+                sin_theta = np.sin(angle_rad)
+                
+                # Rotate around the center
+                for node in pos_array:
+                    x, y = pos_array[node]
+                    # Translate to origin
+                    x_centered = x - center_x
+                    y_centered = y - center_y
+                    
+                    # Rotate
+                    x_rotated = x_centered * cos_theta - y_centered * sin_theta
+                    y_rotated = x_centered * sin_theta + y_centered * cos_theta
+                    
+                    # Translate back
+                    pos_array[node] = np.array([x_rotated + center_x, y_rotated + center_y])
+                    
+            elif op == 'flip_h':
+                # Flip horizontally around the center
+                for node in pos_array:
+                    x, y = pos_array[node]
+                    pos_array[node] = np.array([2 * center_x - x, y])
+                    
+            elif op == 'flip_v':
+                # Flip vertically around the center
+                for node in pos_array:
+                    x, y = pos_array[node]
+                    pos_array[node] = np.array([x, 2 * center_y - y])
+                    
+            elif op == 'transpose':
+                # Swap x and y coordinates
+                for node in pos_array:
+                    x, y = pos_array[node]
+                    pos_array[node] = np.array([y, x])
+        
+        return pos_array
 
     def _create_non_overlapping_layout(self, G):
         """
@@ -794,82 +877,6 @@ class TopologicalGraph:
         
         return adjusted_layouts
 
-    def layout_by_projected_centroid(self, G):
-        """Project 3D coordinates to 2D using captured viewpoint"""
-        pos = {}
-        for node in G.nodes():
-            coord = G.nodes[node]['coord']
-            # Transform using captured view parameters
-            pos[node] = self._transform_3d_to_2d(coord)
-        return self._adjust_layout(pos)
-
-    def _transform_3d_to_2d(self, coord):
-        """Convert 3D coordinate to 2D projection based on captured viewpoint"""
-        # Get camera parameters from captured view
-        cam_azim, cam_elev, cam_roll = np.deg2rad(self.angles)
-        
-        # Convert coordinate to numpy array and center
-        coord = np.array(coord) - self.center
-        
-        # Rotation matrices
-        R_z = np.array([[np.cos(cam_azim), -np.sin(cam_azim), 0],
-                        [np.sin(cam_azim), np.cos(cam_azim), 0],
-                        [0, 0, 1]])
-        
-        R_x = np.array([[1, 0, 0],
-                        [0, np.cos(cam_elev), -np.sin(cam_elev)],
-                        [0, np.sin(cam_elev), np.cos(cam_elev)]])
-        
-        # Apply rotations
-        rotated = R_z @ R_x @ coord
-        
-        # Orthographic projection (ignore Z-axis)
-        x_proj = rotated[0] * self.zoom_level
-        y_proj = rotated[1] * self.zoom_level
-        
-        # Adjust for viewport size
-        if self.viewport_size:
-            x_proj += self.viewport_size[0] / 2
-            y_proj += self.viewport_size[1] / 2
-        
-        return (x_proj, y_proj)
-
-    def _adjust_layout(self, pos):
-        """Maintain original spatial relationships while fitting to viewport"""
-        positions = np.array(list(pos.values()))
-        if len(positions) == 0:
-            return pos
-
-        # 1. Apply the same view transformation as the node-edge skeleton
-        min_coords = positions.min(axis=0)
-        max_coords = positions.max(axis=0)
-        range_coords = max_coords - min_coords
-        range_coords[range_coords == 0] = 1  # Prevent division by zero
-        
-        # 2. Normalize while maintaining aspect ratio from node-edge view
-        normalized = (positions - min_coords) / range_coords
-        
-        # 3. Scale to match the node-edge view dimensions
-        if self.viewport_size:
-            # Use actual viewport size from captured view
-            scaled_x = normalized[:,0] * self.viewport_size[0] * 0.9  # 90% of width
-            scaled_y = normalized[:,1] * self.viewport_size[1] * 0.9  # 90% of height
-        else:
-            # Fallback scaling
-            scaled_x = normalized[:,0] * 1000
-            scaled_y = normalized[:,1] * 1000
-
-        # 4. Center the layout while preserving relative positions
-        center_offset = np.array([scaled_x.min() + (scaled_x.ptp()/2), 
-                                scaled_y.min() + (scaled_y.ptp()/2)])
-        scaled_x -= center_offset[0]
-        scaled_y -= center_offset[1]
-
-        # 5. Flip Y-axis to match napari's coordinate system
-        scaled_y *= -1
-
-        return {node: (scaled_x[i], scaled_y[i]) for i, node in enumerate(pos.keys())}
-
     def get_or_create_global_id(self, coord):
         """Match GBL's node ID persistence logic"""
         rounded = tuple(round(c, 1) for c in coord)
@@ -890,205 +897,12 @@ class TopologicalGraph:
         self.next_global_node_id += 1
         return new_id
 
-    def layout_by_concentric_circles(self, G, ideal_edge_length=1.0, base_distance=3.0):
-        """
-        Compute a layout that arranges disconnected components in concentric rings.
-        
-        Each connected component is laid out using a spring layout and then scaled so that
-        the average edge length in that component equals ideal_edge_length.
-        The largest component is placed at the center and smaller ones are arranged in
-        concentric rings outward.
-        
-        Parameters:
-        -----------
-        G : networkx.Graph
-            The graph to layout
-        ideal_edge_length : float, optional
-            Target edge length for each component (default: 1.0)
-        base_distance : float, optional
-            Base distance between concentric rings (default: 3.0)
-            
-        Returns:
-        --------
-        dict
-            Dictionary mapping node IDs to (x, y) positions
-        """
-        import math
-
-        components = list(nx.connected_components(G))
-        components = sorted(components, key=lambda comp: len(comp), reverse=True)
-        overall_pos = {}
-
-        def scale_layout(subG, pos, ideal_length):
-            if subG.number_of_nodes() <= 1:
-                return pos
-            edges = list(subG.edges())
-            lengths = [np.linalg.norm(pos[u] - pos[v]) for u, v in edges]
-            avg_length = np.mean(lengths) if lengths else 1.0
-            scale = ideal_length / avg_length
-            for node in pos:
-                pos[node] = pos[node] * scale
-            return pos
-
-        # Handle empty graph case
-        if len(components) == 0:
-            return {}
-        
-        # Place largest component in center
-        central_comp = components[0]
-        central_subG = G.subgraph(central_comp)
-        central_pos = nx.spring_layout(central_subG, k=ideal_edge_length, seed=42)
-        central_pos = scale_layout(central_subG, central_pos, ideal_edge_length)
-        for node, pos in central_pos.items():
-            overall_pos[node] = pos
-
-        # Arrange remaining components in concentric rings
-        remaining = components[1:]
-        n = len(remaining)
-        if n > 0:
-            comps_per_ring = math.ceil(math.sqrt(n))
-            for idx, comp in enumerate(remaining, start=1):
-                ring_index = math.ceil(idx / comps_per_ring)
-                pos_in_ring = (idx - 1) % comps_per_ring
-                angle = 2 * math.pi * pos_in_ring / comps_per_ring
-                offset = np.array([
-                    base_distance * ring_index * math.cos(angle),
-                    base_distance * ring_index * math.sin(angle)
-                ])
-                subG = G.subgraph(comp)
-                subpos = nx.spring_layout(subG, k=ideal_edge_length, seed=42)
-                subpos = scale_layout(subG, subpos, ideal_edge_length)
-                for node, pos in subpos.items():
-                    overall_pos[node] = pos + offset
-                
-        # Adjust layout to fit viewport
-        return self._adjust_layout(overall_pos)
-
-    def layout_disconnected_components(self, G, ideal_edge_length=1.0, base_distance=2.0):
-        """
-        Compute a layout that arranges disconnected components in concentric rings.
-        Each connected component is laid out using a spring layout and then scaled so that
-        the average edge length in that component equals ideal_edge_length.
-        The largest component is placed at the center and smaller ones are arranged in
-        concentric rings outward, minimizing white space.
-        
-        Parameters:
-        -----------
-        G : networkx.Graph
-            Graph to layout
-        ideal_edge_length : float, optional
-            Ideal length for edges within components (default: 1.0)
-        base_distance : float, optional
-            Base distance between components (default: 2.0)
-            
-        Returns:
-        --------
-        dict
-            Mapping of nodes to positions {node: (x, y)}
-        """
-        import math
-
-        components = list(nx.connected_components(G))
-        components = sorted(components, key=lambda comp: len(comp), reverse=True)
-        overall_pos = {}
-
-        def scale_layout(subG, pos, ideal_length):
-            """Scale the layout to have the ideal average edge length"""
-            if subG.number_of_nodes() <= 1:
-                return pos
-            edges = list(subG.edges())
-            lengths = [np.linalg.norm(pos[u] - pos[v]) for u, v in edges]
-            avg_length = np.mean(lengths) if lengths else 1.0
-            scale = ideal_length / avg_length
-            for node in pos:
-                pos[node] = pos[node] * scale
-            return pos
-        
-        def get_component_radius(subG, pos):
-            """Get the radius of a component based on its layout"""
-            if not pos:
-                return 0
-            # Calculate the center of the component
-            center = np.mean([pos[n] for n in pos], axis=0)
-            # Calculate the maximum distance from the center
-            max_dist = max([np.linalg.norm(pos[n] - center) for n in pos]) if pos else 0
-            return max_dist
-        
-        # If there are no components, return empty layout
-        if not components:
-            return {}
-        
-        # Layout the central (largest) component
-        central_comp = components[0]
-        central_subG = G.subgraph(central_comp)
-        central_pos = nx.spring_layout(central_subG, k=ideal_edge_length, seed=42)
-        central_pos = scale_layout(central_subG, central_pos, ideal_edge_length)
-        
-        # Get the radius of the central component
-        central_radius = get_component_radius(central_subG, central_pos)
-        
-        # Add central component to overall layout
-        for node, pos in central_pos.items():
-            overall_pos[node] = pos
-
-        # Layout remaining components in concentric rings with adaptive spacing
-        remaining = components[1:]
-        if remaining:
-            # Sort remaining components by size (largest first)
-            remaining = sorted(remaining, key=len, reverse=True)
-            
-            # Calculate how many components to place in each ring
-            # Use a more adaptive approach based on component sizes
-            ring_assignments = []  # [(ring_index, angle, component), ...]
-            current_ring = 1
-            angle_step = 2 * math.pi / 8  # Start with 8 positions in first ring
-            current_angle = 0
-            
-            for comp in remaining:
-                # Create a subgraph for this component
-                subG = G.subgraph(comp)
-                subpos = nx.spring_layout(subG, k=ideal_edge_length, seed=42)
-                subpos = scale_layout(subG, subpos, ideal_edge_length)
-                
-                # Get the radius of this component
-                comp_radius = get_component_radius(subG, subpos)
-                
-                # Assign to current ring and angle
-                ring_assignments.append((current_ring, current_angle, comp, subpos, comp_radius))
-                
-                # Update angle for next component
-                current_angle += angle_step
-                
-                # If we've gone all the way around, move to next ring
-                if current_angle >= 2 * math.pi:
-                    current_ring += 1
-                    # Increase number of positions in next ring
-                    angle_step = 2 * math.pi / (8 * current_ring)
-                    current_angle = 0
-            
-            # Now place components based on assignments, adjusting distances to minimize white space
-            for ring_idx, angle, comp, subpos, comp_radius in ring_assignments:
-                # Calculate distance from center based on ring index and component sizes
-                # Use a more compact layout by considering component sizes
-                ring_distance = central_radius + comp_radius + base_distance * ring_idx
-                
-                # Calculate offset based on angle and distance
-                offset = np.array([
-                    ring_distance * math.cos(angle),
-                    ring_distance * math.sin(angle)
-                ])
-                
-                # Add component with offset
-                for node, pos in subpos.items():
-                    overall_pos[node] = pos + offset
-        
-        return overall_pos
-
     def capture_topological_graph_concentric(self, G, component_colors):
         """
         Capture a screenshot of the topological graph with concentric layout.
         Ensures consistent edge lengths across components and maximizes component sizes
         to fill available space while preventing overlap.
+        Maintains consistent circle layout across timepoints.
         
         Parameters:
         -----------
@@ -1111,6 +925,35 @@ class TopologicalGraph:
         # Get connected components
         components = list(nx.connected_components(G))
         components = sorted(components, key=len, reverse=True)
+        
+        # Store the number of components from the first frame for consistency
+        if not hasattr(self, 'initial_num_components') or self.frame_idx == 0:
+            self.initial_num_components = len(components)
+            self.initial_components_per_ring = 8  # Maximum components per ring
+            
+            # Calculate the actual number of rings needed for the first frame
+            # The first component is placed in the center, so we only need rings for the remaining components
+            remaining_components = len(components) - 1  # Subtract 1 for the center component
+            
+            # Initialize with 1 ring
+            self.initial_num_rings = 1
+            components_in_first_ring = min(self.initial_components_per_ring, remaining_components)
+            remaining_after_first = remaining_components - components_in_first_ring
+            
+            # If we still have components left, calculate additional rings needed
+            if remaining_after_first > 0:
+                # For each additional ring, we can fit more components
+                ring_idx = 1
+                while remaining_after_first > 0:
+                    components_in_this_ring = min(self.initial_components_per_ring + ring_idx * 2, remaining_after_first)
+                    remaining_after_first -= components_in_this_ring
+                    if remaining_after_first > 0:
+                        self.initial_num_rings += 1
+                    ring_idx += 1
+            
+            self.initial_ring_radius = 0.5  # Start with a reasonable distance from center
+            self.initial_ring_spacing = 0.7  # Increase radius for next ring
+            print(f"Initial frame has {self.initial_num_components} components, using {self.initial_num_rings} rings")
         
         # Calculate target edge length based on the largest component
         target_edge_length = 0.1  # Default value
@@ -1154,32 +997,51 @@ class TopologicalGraph:
                 'scale': 1.0  # Initial scale factor
             })
         
-        # Place other components in concentric rings
+        # Place other components in concentric rings with consistent structure
         if len(components) > 1:
-            # Calculate the number of rings needed
-            remaining_components = components[1:]
+            # Use the number of rings and components per ring from the first frame
+            ring_radius = self.initial_ring_radius if hasattr(self, 'initial_ring_radius') else 0.5
+            components_per_ring = self.initial_components_per_ring if hasattr(self, 'initial_components_per_ring') else 8
+            num_rings = self.initial_num_rings if hasattr(self, 'initial_num_rings') else 1
+            ring_spacing = self.initial_ring_spacing if hasattr(self, 'initial_ring_spacing') else 0.7
             
-            # Place components on rings
-            ring_radius = 0.7  # Start with a reasonable distance from center
-            components_per_ring = 6  # Maximum components per ring
+            # debug print these values
+            print(f"Using {num_rings} rings with {components_per_ring} components per ring")
             
+            remaining_components = components[1:]  # Skip the center component
             component_idx = 0
-            ring_idx = 0
             
-            while component_idx < len(remaining_components):
-                # Calculate how many components to place on this ring
-                current_ring_capacity = min(components_per_ring + ring_idx * 2, len(remaining_components) - component_idx)
+            # Strictly enforce the number of rings
+            for ring_idx in range(num_rings):
+                # Calculate ring radius
+                current_radius = ring_radius + ring_idx * ring_spacing
                 
+                # Calculate how many components to place on this ring
+                # If this is the last ring, place all remaining components
+                if ring_idx == num_rings - 1:
+                    current_ring_capacity = len(remaining_components) - component_idx
+                else:
+                    current_ring_capacity = min(components_per_ring + ring_idx * 2, 
+                                               len(remaining_components) - component_idx)
+                
+                if current_ring_capacity <= 0:
+                    break  # No more components to place
+                
+                print(f"Ring {ring_idx+1}: placing {current_ring_capacity} components")
+                
+                # Place components evenly around the ring
                 for i in range(current_ring_capacity):
+                    if component_idx >= len(remaining_components):
+                        break
+                        
                     component = remaining_components[component_idx]
                     
                     # Calculate angle for this component
                     angle = 2 * np.pi * i / current_ring_capacity
                     
-                    # Calculate base position for this component
-                    base_x = ring_radius * np.cos(angle)
-                    base_y = ring_radius * np.sin(angle)
-                    base_pos = np.array([base_x, base_y])
+                    # Calculate component center
+                    center_x = current_radius * np.cos(angle)
+                    center_y = current_radius * np.sin(angle)
                     
                     # Create a mini-layout for this component
                     component_subgraph = G.subgraph(component)
@@ -1196,15 +1058,11 @@ class TopologicalGraph:
                         'pos': component_pos,
                         'center': comp_center,
                         'radius': comp_radius,
-                        'base_pos': base_pos,
+                        'base_pos': np.array([center_x, center_y]),
                         'scale': 1.0  # Initial scale factor
                     })
                     
                     component_idx += 1
-                
-                # Move to the next ring
-                ring_idx += 1
-                ring_radius += 0.5  # Increase radius for next ring
         
         # STEP 1: Normalize edge lengths across components
         for i, layout in enumerate(component_layouts):
@@ -1296,14 +1154,35 @@ class TopologicalGraph:
                         overlap = True
                         break
             
-            if overlap:
+            if not overlap:
+                max_scale = test_scale
+            else:
+                # We found an overlap, so stop increasing the scale
                 break
         
         # Apply the maximum scale to all positions
         scaled_pos = {node: np.array(position) * max_scale for node, position in pos.items()}
         
         # STEP 4: Apply overlap prevention for final adjustments
-        final_pos = self._simple_overlap_prevention(G, scaled_pos, components)
+        final_pos = scaled_pos # self._simple_overlap_prevention(G, scaled_pos, components)
+        
+        # Store the axis limits from the first frame for consistency
+        if not hasattr(self, 'initial_axis_limits') or self.frame_idx == 0:
+            positions = np.array(list(final_pos.values()))
+            min_x, min_y = positions.min(axis=0) - 0.1
+            max_x, max_y = positions.max(axis=0) + 0.1
+            
+            # Ensure the plot is square
+            width = max(max_x - min_x, max_y - min_y)
+            center_x = (min_x + max_x) / 2
+            center_y = (min_y + max_y) / 2
+            
+            self.initial_axis_limits = {
+                'x_min': center_x - width/2,
+                'x_max': center_x + width/2,
+                'y_min': center_y - width/2,
+                'y_max': center_y + width/2
+            }
         
         # Group edges by component for coloring
         component_edge_groups = {}
@@ -1334,13 +1213,13 @@ class TopologicalGraph:
             if component in component_colors:
                 color = component_colors[component]
                 nx.draw_networkx_nodes(G, final_pos, nodelist=nodes, node_color=color, 
-                                      node_size=(self.node_size-1000), alpha=0.8, ax=ax)
+                                      node_size=(self.node_size-500), alpha=0.8, ax=ax)
         
         # Draw any nodes without component info
         nodes_without_component = [n for n in G.nodes() if n in final_pos and 'component' not in G.nodes[n]]
         if nodes_without_component:
             nx.draw_networkx_nodes(G, final_pos, nodelist=nodes_without_component, 
-                                  node_color='gray', node_size=(self.node_size-1000), alpha=0.8, ax=ax)
+                                  node_color='gray', node_size=(self.node_size-500), alpha=0.8, ax=ax)
         
         # Add node labels
         nx.draw_networkx_labels(G, final_pos, font_size=self.node_font_size, font_color='black', ax=ax)
@@ -1349,22 +1228,27 @@ class TopologicalGraph:
         ax.axis('off')
         plt.tight_layout(pad=0)
         
-        # Set axis limits to minimize white space - calculate based on node positions
-        if final_pos:
-            positions = np.array(list(final_pos.values()))
-            min_x, min_y = positions.min(axis=0) - 0.3
-            max_x, max_y = positions.max(axis=0) + 0.3
-            
-            # Ensure the plot is square
-            width = max(max_x - min_x, max_y - min_y)
-            center_x = (min_x + max_x) / 2
-            center_y = (min_y + max_y) / 2
-            
-            ax.set_xlim(center_x - width/2, center_x + width/2)
-            ax.set_ylim(center_y - width/2, center_y + width/2)
+        # Use consistent axis limits across frames
+        if hasattr(self, 'initial_axis_limits'):
+            ax.set_xlim(self.initial_axis_limits['x_min'], self.initial_axis_limits['x_max'])
+            ax.set_ylim(self.initial_axis_limits['y_min'], self.initial_axis_limits['y_max'])
         else:
-            ax.set_xlim(-1.0, 1.0)
-            ax.set_ylim(-1.0, 1.0)
+            # Fallback if initial limits aren't set
+            if final_pos:
+                positions = np.array(list(final_pos.values()))
+                min_x, min_y = positions.min(axis=0) - 0.1
+                max_x, max_y = positions.max(axis=0) + 0.1
+                
+                # Ensure the plot is square
+                width = max(max_x - min_x, max_y - min_y)
+                center_x = (min_x + max_x) / 2
+                center_y = (min_y + max_y) / 2
+                
+                ax.set_xlim(center_x - width/2, center_x + width/2)
+                ax.set_ylim(center_y - width/2, center_y + width/2)
+            else:
+                ax.set_xlim(-1.0, 1.0)
+                ax.set_ylim(-1.0, 1.0)
         
         # Convert the figure to an image
         fig.canvas.draw()
@@ -1493,212 +1377,4 @@ class TopologicalGraph:
         
         return pos_array
 
-    def create_projected_graph_image(self, node_labels=True, edge_labels=False, figsize=(10, 10)):
-        """
-        Create a 2D projected graph visualization.
-        
-        Parameters:
-        -----------
-        node_labels : bool, optional
-            Whether to show node labels (default: True)
-        edge_labels : bool, optional
-            Whether to show edge labels (default: False)
-        figsize : tuple, optional
-            Figure size (default: (10, 10))
-            
-        Returns:
-        --------
-        ndarray
-            Graph visualization image
-        """
-        if self.G is None or len(self.G.nodes) == 0:
-            return np.zeros((100, 100, 3), dtype=np.uint8)
-        
-        # Create a new figure
-        fig, ax = plt.subplots(figsize=figsize)
-        
-        # Get node positions (use 2D projection of 3D coordinates)
-        pos = {}
-        for node, data in self.G.nodes(data=True):
-            if 'pos' in data:
-                z, y, x = data['pos']
-                pos[node] = (x, y)  # Use x, y for 2D projection
-        
-        # Draw the graph
-        nx.draw_networkx_edges(self.G, pos, ax=ax, width=self.edge_width, alpha=0.7)
-        
-        # Draw nodes with different colors based on type
-        terminal_nodes = [n for n, d in self.G.nodes(data=True) if d.get('type') == 'terminal']
-        junction_nodes = [n for n, d in self.G.nodes(data=True) if d.get('type') == 'junction']
-        
-        nx.draw_networkx_nodes(self.G, pos, nodelist=terminal_nodes, 
-                              node_color='blue', node_size=800, alpha=0.8, ax=ax)
-        nx.draw_networkx_nodes(self.G, pos, nodelist=junction_nodes, 
-                              node_color='red', node_size=800, alpha=0.8, ax=ax)
-        
-        # Add node labels if requested
-        if node_labels:
-            nx.draw_networkx_labels(self.G, pos, font_size=50, font_color='black', ax=ax)
-        
-        # Add edge labels if requested
-        if edge_labels and nx.get_edge_attributes(self.G, 'weight'):
-            edge_labels = nx.get_edge_attributes(self.G, 'weight')
-            nx.draw_networkx_edge_labels(self.G, pos, edge_labels=edge_labels, ax=ax)
-        
-        # Remove axis
-        ax.axis('off')
-        
-        # Convert the figure to an image - use a safer approach that works with different backends
-        fig.canvas.draw()
-        
-        # Get the RGBA buffer from the figure canvas
-        w, h = fig.canvas.get_width_height()
-        
-        # Try different methods to get the buffer depending on the canvas type
-        try:
-            # For Agg backend
-            buf = fig.canvas.buffer_rgba()
-            img = np.asarray(buf)
-        except AttributeError:
-            try:
-                # For Qt backend
-                buf = fig.canvas.tostring_argb()
-                img = np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 4)
-                
-                # Convert ARGB to RGBA
-                img = np.roll(img, 3, axis=2)
-            except AttributeError:
-                # Fallback method
-                buf = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-                img = buf.reshape(h, w, 3)
-        
-        # Close the figure to free memory
-        plt.close(fig)
-        
-        return img
-
-    def create_concentric_graph_image(self, node_labels=True, edge_labels=False, figsize=(10, 10)):
-        """
-        Create a concentric graph visualization.
-        
-        Parameters:
-        -----------
-        node_labels : bool, optional
-            Whether to show node labels (default: True)
-        edge_labels : bool, optional
-            Whether to show edge labels (default: False)
-        figsize : tuple, optional
-            Figure size (default: (10, 10))
-            
-        Returns:
-        --------
-        ndarray
-            Graph visualization image
-        """
-        if self.G is None or len(self.G.nodes) == 0:
-            return np.zeros((100, 100, 3), dtype=np.uint8)
-        
-        # Create a new figure
-        fig, ax = plt.subplots(figsize=figsize)
-        
-        # Create a concentric layout
-        pos = nx.shell_layout(self.G)
-        
-        # Draw the graph
-        nx.draw_networkx_edges(self.G, pos, ax=ax, width=self.edge_width, alpha=0.7)
-        
-        # Draw nodes with different colors based on type
-        terminal_nodes = [n for n, d in self.G.nodes(data=True) if d.get('type') == 'terminal']
-        junction_nodes = [n for n, d in self.G.nodes(data=True) if d.get('type') == 'junction']
-        
-        nx.draw_networkx_nodes(self.G, pos, nodelist=terminal_nodes, 
-                              node_color='blue', node_size=self.node_size, alpha=0.8, ax=ax)
-        nx.draw_networkx_nodes(self.G, pos, nodelist=junction_nodes, 
-                              node_color='red', node_size=self.node_size, alpha=0.8, ax=ax)
-        
-        # Add node labels if requested
-        if node_labels:
-            nx.draw_networkx_labels(self.G, pos, font_size=self.node_font_size, font_color='black', ax=ax)
-        
-        # Add edge labels if requested
-        if edge_labels and nx.get_edge_attributes(self.G, 'weight'):
-            edge_labels = nx.get_edge_attributes(self.G, 'weight')
-            nx.draw_networkx_edge_labels(self.G, pos, edge_labels=edge_labels, ax=ax)
-        
-        # Remove axis
-        ax.axis('off')
-        
-        # Convert the figure to an image - use a safer approach that works with different backends
-        fig.canvas.draw()
-        
-        # Get the RGBA buffer from the figure canvas
-        w, h = fig.canvas.get_width_height()
-        
-        # Try different methods to get the buffer depending on the canvas type
-        try:
-            # For Agg backend
-            buf = fig.canvas.buffer_rgba()
-            img = np.asarray(buf)
-        except AttributeError:
-            try:
-                # For Qt backend
-                buf = fig.canvas.tostring_argb()
-                img = np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 4)
-                
-                # Convert ARGB to RGBA
-                img = np.roll(img, 3, axis=2)
-            except AttributeError:
-                # Fallback method
-                buf = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-                img = buf.reshape(h, w, 3)
-        
-        # Close the figure to free memory
-        plt.close(fig)
-        
-        return img
-
-    def update_graph(self, G, frame_idx=None):
-        """
-        Update the internal graph with a new graph.
-        
-        Parameters:
-        -----------
-        G : networkx.Graph
-            The new graph to store
-        frame_idx : int, optional
-            Frame index for tracking nodes across timepoints
-        """
-        self.G = G
-        
-        # Store the frame index if provided
-        if frame_idx is not None:
-            self.frame_idx = frame_idx
-        
-        # If we have a node tracker manager, update it with the new graph
-        if hasattr(self, 'node_tracker_manager') and self.node_tracker_manager is not None:
-            self.node_tracker_manager.update_node_positions(G, frame_idx)
-        
-        print(f"Updated graph with {len(G.nodes())} nodes and {len(G.edges())} edges")
-
-    def get_node_labels_and_coordinates(self):
-        """
-        Get the node labels and their 3D coordinates from the graph.
-        
-        Returns:
-        --------
-        dict
-            Dictionary mapping node IDs to their coordinates {node_id: (z, y, x)}
-        """
-        if self.G is None:
-            return {}
-        
-        node_coords = {}
-        for node, data in self.G.nodes(data=True):
-            if 'coord' in data:
-                # Use the global ID as the node label
-                global_id = self.get_or_create_global_id(data['coord'])
-                node_coords[global_id] = data['coord']
-        
-        return node_coords
-
-# Add other graph-related methods as needed 
+    

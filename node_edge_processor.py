@@ -497,11 +497,18 @@ class NodeEdgeProcessor:
             
             # Print some debug info
             node_with_component = sum(1 for _, data in G.nodes(data=True) if 'component' in data)
-            print(f"Nodes with component info: {node_with_component} out of {G.number_of_nodes()}")
+            # print(f"Nodes with component info: {node_with_component} out of {G.number_of_nodes()}")
             
             # Capture graph visualizations with both layouts
-            img_topo_graph_projected = self.topological_graph._capture_topological_graph(G, component_colors)
-            img_topo_graph_concentric = self.topological_graph.capture_topological_graph_concentric(G, component_colors)
+            img_topo_graph_projected = self.topological_graph._capture_topological_graph(
+                G, 
+                component_colors,
+                viewpoint_selector=self.viewpoint_selector
+            )
+            img_topo_graph_concentric = self.topological_graph.capture_topological_graph_concentric(
+                G, 
+                component_colors
+            )
 
             # Capture node-edge screenshot with the same frame index for consistent node IDs
             node_edge_img = self.capture_screenshot(node_edge_data, G, component_colors, frame_idx)

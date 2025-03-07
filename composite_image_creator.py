@@ -222,7 +222,7 @@ class CompositeImageCreator:
             List of images to combine
         labels : list
             List of labels for each image
-        
+            
         Returns:
         --------
         list
@@ -419,11 +419,11 @@ class CompositeImageCreator:
                         pad_top, pad_bottom, pad_left, pad_right = params
                         
                         # Create padded image with the same parameters as before
-                        if img.ndim == 2:
-                            padded = np.zeros((max_h, max_w), dtype=img.dtype)
+                        if img.ndim == 3:
+                            padded = np.zeros((max_h, max_w, img.shape[2]), dtype=img.dtype)
                         else:
                             # Explicitly create black background (all zeros)
-                            padded = np.zeros((max_h, max_w, img.shape[2]), dtype=img.dtype)
+                            padded = np.zeros((max_h, max_w), dtype=img.dtype)
                         
                         # Calculate where to place the image
                         h, w = img.shape[:2]
@@ -435,18 +435,18 @@ class CompositeImageCreator:
                         resized = resize(img, (target_h, target_w), preserve_range=True, anti_aliasing=True)
                         
                         # Place the resized image in the padded canvas
-                        if img.ndim == 2:
-                            padded[pad_top:pad_top+target_h, pad_left:pad_left+target_w] = resized
+                        if img.ndim == 3:
+                            padded[pad_top:pad_top+target_h, pad_left:pad_left+target_w, :] = resized
                         else:
                             padded[pad_top:pad_top+target_h, pad_left:pad_left+target_w] = resized
                         
                         padded_images.append(padded)
                     else:
                         # If we don't have parameters for this image, use zeros (black)
-                        if img.ndim == 2:
-                            padded = np.zeros((max_h, max_w), dtype=img.dtype)
-                        else:
+                        if img.ndim == 3:
                             padded = np.zeros((max_h, max_w, img.shape[2]), dtype=img.dtype)
+                        else:
+                            padded = np.zeros((max_h, max_w), dtype=img.dtype)
                         padded_images.append(padded)
             else:
                 # Calculate padding for each image and store the parameters
@@ -476,32 +476,15 @@ class CompositeImageCreator:
                     padding_params.append((pad_top, pad_bottom, pad_left, pad_right))
                     
                     # Create padded image with black background
-                    if img.ndim == 3 and img.shape[2] == 4:  # RGBA image
-                        # Create a black background with full opacity
-                        padded = np.zeros((max_h, max_w, 4), dtype=np.uint8)
-                        padded[:, :, 3] = 255  # Set alpha channel to fully opaque
-                        
-                        # Calculate the region to place the image
-                        y_start = pad_top
-                        y_end = max_h - pad_bottom
-                        x_start = pad_left
-                        x_end = max_w - pad_right
-                        
-                        # Place the image
-                        padded[y_start:y_end, x_start:x_end, :] = img
-                        
-                        # For any transparent pixels in the original image, make them black
-                        # Create a mask of transparent pixels
-                        transparent_mask = padded[:, :, 3] == 0
-                        
-                        # Set RGB channels to black (0) where transparent
-                        padded[transparent_mask, 0:3] = 0
-                        
-                        # Set alpha to fully opaque
-                        padded[:, :, 3] = 255
+                    if img.ndim == 3:
+                        # For RGB/RGBA images, create a padded array with the same number of channels
+                        padded = np.zeros((max_h, max_w, img.shape[2]), dtype=img.dtype)
+                        # Assign the image to the padded array
+                        padded[pad_top:max_h-pad_bottom, pad_left:max_w-pad_right, :] = img
                     else:
-                        # For RGB or grayscale images
+                        # For grayscale images
                         padded = np.zeros((max_h, max_w), dtype=img.dtype)
+                        # Assign the image to the padded array
                         padded[pad_top:max_h-pad_bottom, pad_left:max_w-pad_right] = img
                     
                     padded_images.append(padded)

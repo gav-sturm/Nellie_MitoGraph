@@ -66,7 +66,7 @@ class ModularViewpointSelector:
         
         # Create GIF generator for timeseries
         gif_filename = os.path.splitext(os.path.basename(output_file))[0] + "_timeseries.gif"
-        self.gif_generator = GIFGenerator(self.output_dir, output_file=gif_filename)
+        self.gif_generator = GIFGenerator(self.output_dir, output_file=gif_filename, frame_rate=5)
         
         # Store common bounding box for all images
         self.common_bbox = None
@@ -112,7 +112,7 @@ class ModularViewpointSelector:
         
         # Debug print to verify ROI mask was created
         if hasattr(self.roi_selector, 'roi_mask') and self.roi_selector.roi_mask is not None:
-            print(f"ROI mask created successfully with shape: {self.roi_selector.roi_mask.shape}")
+            # print(f"ROI mask created successfully with shape: {self.roi_selector.roi_mask.shape}")
             # Visualize the ROI mask for debugging
             debug_visualizer.visualize(self.roi_selector.roi_mask, "ROI Mask", save=True)
         else:
@@ -370,7 +370,7 @@ class ModularViewpointSelector:
             frame_files.append(frame_file)
         
         # Create GIF from frames
-        gif_file = self.gif_generator.create_gif_from_files(frame_files, frame_rate=5)
+        gif_file = self.gif_generator.create_gif_from_files(frame_files)
         
         return gif_file
 
