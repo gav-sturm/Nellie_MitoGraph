@@ -406,7 +406,7 @@ class GraphBuilder3D:
 
 def main():
     # global_path = r"C:\Users\gavst\Box\Box-Gdrive\Calico\scripts\2025-02-13_yeast_mitographs\event1_2024-10-22_13-14-25_\crop1_snout\crop1_nellie_out\nellie_necessities"
-    global_path = r"C:\Users\gavst\Box\Box-Gdrive\Calico\scripts\2025-02-13_yeast_mitographs\event1_2024-10-22_13-18-01_\crop1_snout\crop1_nellie_out\nellie_necessities"
+    global_path = r"/Users/gabrielsturm/Documents/GitHub/Nellie_MG/event1_2024-10-22_13-14-25_/crop1_snout/crop1_nellie_out/nellie_necessities"
     pixel_class_file = os.path.join(global_path, "crop1.ome-im_pixel_class.ome.tif")
     branch_label_file = os.path.join(global_path, "crop1.ome-im_branch_label_reassigned.ome.tif")
     skeleton_file = os.path.join(global_path, "crop1.ome-im_skel.ome.tif")

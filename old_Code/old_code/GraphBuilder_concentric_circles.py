@@ -131,6 +131,7 @@ class GraphBuilder3D:
         """
         first_frame = self.skel_stack[0]
         mip = np.max(first_frame, axis=0)
+        print(f"DEBUG: MIP shape: {mip.shape}")
 
         print("Launching Napari for ROI selection. Draw a polygon on the MIP image,")
         print("then close the viewer window when done.")
@@ -145,10 +146,12 @@ class GraphBuilder3D:
             self.roi_mask = np.ones(mip.shape, dtype=bool)
         else:
             polygon_coords = shapes_layer.data[0]
+            print(f"DEBUG: Polygon coordinates shape: {polygon_coords.shape}")
             rr, cc = sk_polygon(polygon_coords[:, 0], polygon_coords[:, 1], mip.shape)
             mask = np.zeros(mip.shape, dtype=bool)
             mask[rr, cc] = True
             self.roi_mask = mask
+            print(f"DEBUG: ROI mask shape: {self.roi_mask.shape}")
             print("ROI selected.")
 
     def build_graph_for_frame(self, frame_idx):
@@ -161,7 +164,9 @@ class GraphBuilder3D:
         pixel_class_vol = self.pixel_class_stack[frame_idx].copy()
         if self.roi_mask is not None:
             roi_mask_3d = np.broadcast_to(self.roi_mask, pixel_class_vol.shape)
+            print(f"DEBUG: ROI mask 3d shape: {roi_mask_3d.shape}")
             pixel_class_vol = np.where(roi_mask_3d, pixel_class_vol, 0)
+            print(f"DEBUG: Filtered pixel class volume shape: {pixel_class_vol.shape}")
 
         # --- Merge junction pixels (value 4) ---
         junction_mask = (pixel_class_vol == 4)
@@ -406,7 +411,8 @@ class GraphBuilder3D:
 
 def main():
     # global_path = r"C:\Users\gavst\Box\Box-Gdrive\Calico\scripts\2025-02-13_yeast_mitographs\event1_2024-10-22_13-14-25_\crop1_snout\crop1_nellie_out\nellie_necessities"
-    global_path = r"C:\Users\gavst\Box\Box-Gdrive\Calico\scripts\2025-02-13_yeast_mitographs\event1_2024-10-22_13-18-01_\crop1_snout\crop1_nellie_out\nellie_necessities"
+    # global_path = r"C:\Users\gavst\Box\Box-Gdrive\Calico\scripts\2025-02-13_yeast_mitographs\event1_2024-10-22_13-18-01_\crop1_snout\crop1_nellie_out\nellie_necessities"
+    global_path = r"/Users/gabrielsturm/Documents/GitHub/Nellie_MG/event1_2024-10-22_13-14-25_/crop1_snout/crop1_nellie_out/nellie_necessities"
     pixel_class_file = os.path.join(global_path, "crop1.ome-im_pixel_class.ome.tif")
     branch_label_file = os.path.join(global_path, "crop1.ome-im_branch_label_reassigned.ome.tif")
     skeleton_file = os.path.join(global_path, "crop1.ome-im_skel.ome.tif")

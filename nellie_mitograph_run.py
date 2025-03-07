@@ -19,6 +19,12 @@ from composite_image_creator import CompositeImageCreator
 from gif_generator import GIFGenerator
 from node_tracker import NodeTrackerManager
 from node_edge_processor import NodeEdgeProcessor
+from skimage.transform import resize
+from debug_visualizer import DebugVisualizer
+from skimage.draw import polygon as sk_polygon
+
+# Create a class-level debug visualizer
+debug_visualizer = DebugVisualizer()
 
 class ModularViewpointSelector:
     """
@@ -64,17 +70,22 @@ class ModularViewpointSelector:
         
         # Store common bounding box for all images
         self.common_bbox = None
+        self.image_quality = 95
+        self.image_DPI = 300
     
-    def run_workflow(self, branch_file, original_file, node_edge_file=None, obj_label_file=None, timepoints=None):
+    def run_workflow(self, skeleton_file, branch_file, original_file, node_edge_file=None, obj_label_file=None, timepoints=None):
         """
         Run the workflow:
-          1. Select viewpoint on the skeleton volume.
-          2. Let the user draw an ROI on the captured skeleton screenshot.
-          3. If timeseries, let the user select timepoints to process.
-          4. Capture composite screenshots of all modalities.
+          1. Create a MIP of the skeleton volume and let the user draw an ROI.
+          2. Apply the ROI to the 3D volume.
+          3. Select viewpoint on the filtered volume.
+          4. If timeseries, let the user select timepoints to process.
+          5. Capture composite screenshots of all modalities.
         
         Parameters:
         -----------
+        skeleton_file : str
+            Path to the skeleton volume file
         branch_file : str
             Path to the branch volume file
         original_file : str
@@ -91,14 +102,28 @@ class ModularViewpointSelector:
         str
             Path to the saved composite image or GIF file
         """
-        # First, select the viewpoint from the skeleton
-        print("Select viewpoint for the 3D visualization...")
-        self.viewpoint_selector.select_viewpoint(self.volume_loader.volume)
+        # First, create a MIP of the skeleton volume
+        skeleton_volume = self.volume_loader.volume
+        mip = np.max(skeleton_volume, axis=0)
         
-        # Then, let the user draw an ROI on the captured skeleton screenshot
-        if hasattr(self.viewpoint_selector, 'screenshot_img'):
-            print("Draw an ROI to define the region of interest...")
-            self.roi_selector.select_roi(self.viewpoint_selector.screenshot_img)
+        # Let the user draw an ROI on the MIP
+        print("Draw an ROI to define the region of interest...")
+        self.roi_selector.select_roi(mip)
+        
+        # Debug print to verify ROI mask was created
+        if hasattr(self.roi_selector, 'roi_mask') and self.roi_selector.roi_mask is not None:
+            print(f"ROI mask created successfully with shape: {self.roi_selector.roi_mask.shape}")
+            # Visualize the ROI mask for debugging
+            debug_visualizer.visualize(self.roi_selector.roi_mask, "ROI Mask", save=True)
+        else:
+            print("Warning: ROI mask was not created!")
+        
+        # Apply the ROI to the 3D volume
+        filtered_skeleton = self._apply_roi_to_volume(skeleton_volume)
+        
+        # Now select the viewpoint on the filtered volume
+        print("Select viewpoint for the 3D visualization...")
+        self.viewpoint_selector.select_viewpoint(filtered_skeleton)
         
         # If timepoints were provided, parse them
         if timepoints is not None:
@@ -112,13 +137,46 @@ class ModularViewpointSelector:
         
         # Capture composite modalities
         if self.volume_loader.is_timeseries:
-            output_file = self._process_timeseries(branch_file, original_file, node_edge_file, obj_label_file)
+            output_file = self._process_timeseries(skeleton_file, branch_file, original_file, node_edge_file, obj_label_file)
         else:
-            output_file = self._process_single_timepoint(branch_file, original_file, node_edge_file, obj_label_file)
+            output_file = self._process_single_timepoint(skeleton_file, branch_file, original_file, node_edge_file, obj_label_file)
         
         return output_file
     
-    def _process_single_timepoint(self, branch_file, original_file, node_edge_file=None, obj_label_file=None):
+    def _apply_roi_to_volume(self, volume):
+        """
+        Apply the ROI mask to a 3D volume.
+        
+        Parameters:
+        -----------
+        volume : ndarray
+            3D volume data
+            
+        Returns:
+        --------
+        ndarray
+            Filtered volume
+        """
+        if self.roi_selector.roi_mask is None:
+            print("No ROI mask available.")
+            return volume
+        
+        # Get the volume shape
+        z_dim, y_dim, x_dim = volume.shape
+        
+        # The ROI mask should already match the y,x dimensions of the volume
+        # since it was created on the MIP
+        roi_mask_2d = self.roi_selector.roi_mask
+        
+        # Broadcast the 2D mask to 3D
+        mask_3d = np.broadcast_to(roi_mask_2d, volume.shape)
+        
+        # Apply the mask to the volume
+        filtered_volume = np.where(mask_3d, volume, 0)
+        
+        return filtered_volume
+    
+    def _process_single_timepoint(self, skeleton_file, branch_file, original_file, node_edge_file=None, obj_label_file=None):
         """
         Process a single timepoint and create a composite image.
         
@@ -141,99 +199,82 @@ class ModularViewpointSelector:
         # Load additional volumes
         branch_loader = VolumeLoader(branch_file)
         original_loader = VolumeLoader(original_file)
-        obj_label_loader = VolumeLoader(obj_label_file) if obj_label_file else None
-        node_edge_loader = VolumeLoader(node_edge_file) if node_edge_file else None
+        obj_label_loader = VolumeLoader(obj_label_file)
+        node_edge_loader = VolumeLoader(node_edge_file)
         
-        # Capture screenshots with the exact same viewpoint
-        print("Capturing Skeleton screenshot...")
-        img_skel = self.screenshot_manager.capture_screenshot(self.volume_loader.volume)
+        # Apply ROI to all volumes before capturing screenshots
+        filtered_branch_data = self._apply_roi_to_volume(branch_loader.volume)
+        filtered_original_data = self._apply_roi_to_volume(original_loader.volume)
+        filtered_obj_label_data = self._apply_roi_to_volume(obj_label_loader.volume)
+        filtered_node_edge_data = self._apply_roi_to_volume(node_edge_loader.volume)
         
-        print("Capturing Branch Labels screenshot...")
-        img_branch = self.screenshot_manager.capture_screenshot(branch_loader.volume, layer_type='labels')
-        
-        print("Capturing Original Volume screenshot...")
-        img_original = self.screenshot_manager.capture_screenshot(original_loader.volume)
-        
-        print("Generating Depth-Encoded image...")
-        img_depth = self.screenshot_manager.generate_depth_encoded_image(self.volume_loader.volume)
-        
-        print("Capturing Object Labels screenshot...")
-        img_obj_label = None
-        if obj_label_loader:
-            img_obj_label = self.screenshot_manager.capture_screenshot(obj_label_loader.volume, layer_type='labels')
-        else:
-            img_obj_label = self.screenshot_manager.create_placeholder_image("Object Labels\nNot Available")
+        # Capture screenshots of the filtered volumes
+        img_branch_label = self.screenshot_manager.capture_screenshot(filtered_branch_data, layer_type='labels')
+        img_original = self.screenshot_manager.capture_screenshot(filtered_original_data)
+        img_depth = self.screenshot_manager.generate_depth_encoded_image(filtered_original_data)
+        img_obj_label = self.screenshot_manager.capture_screenshot(filtered_obj_label_data, layer_type='labels')
+        img_node_edge = self.screenshot_manager.capture_screenshot(filtered_node_edge_data, layer_type='labels')
         
         # Process node-edge data using the dedicated NodeEdgeProcessor
-        print("Processing Node-Edge data...")
-        img_node_edge = None
-        img_topo_graph = None
-        if node_edge_loader:
-            # Process node-edge data and capture screenshots
-            img_node_edge = self.node_edge_processor.capture_screenshot(node_edge_loader.volume, frame_idx=0)
-            img_topo_graph = self.node_edge_processor.get_topological_graph_image(node_edge_loader.volume, frame_idx=0)
-        else:
-            img_node_edge = self.screenshot_manager.create_placeholder_image("Node-Edge\nNot Available")
-            img_topo_graph = self.screenshot_manager.create_placeholder_image("Topological Graph\nNot Available")
+        img_node_edge2 = self.node_edge_processor.capture_screenshot(filtered_node_edge_data)
         
-        # Apply ROI filtering and cropping consistently to all images
-        print("Applying ROI and creating composite image...")
-        all_images = [img_skel, img_branch, img_obj_label, img_original, img_depth, img_node_edge, img_topo_graph]
+        # Process node-edge data and capture screenshots for topological graphs
+        img_topo_graph_projected, img_topo_graph_concentric = self.node_edge_processor.get_topological_graph_images(filtered_node_edge_data)
         
-        # First, apply ROI to each image and get all bounding boxes
-        filtered_images = []
-        all_bboxes = []
-        for img in all_images:
-            filtered_img, bbox = self.roi_selector.apply_roi_to_image(img)
-            filtered_images.append(filtered_img)
-            all_bboxes.append(bbox)
+        # Collect all images
+        all_images = [img_branch_label, img_obj_label, img_original, img_depth, img_node_edge, img_node_edge2]
         
-        # Find the union of all bounding boxes to ensure consistent cropping
-        min_row = min(bbox[0] for bbox in all_bboxes)
-        max_row = max(bbox[1] for bbox in all_bboxes)
-        min_col = min(bbox[2] for bbox in all_bboxes)
-        max_col = max(bbox[3] for bbox in all_bboxes)
-        common_bbox = (min_row, max_row, min_col, max_col)
-        self.common_bbox = common_bbox
+        # No need to apply ROI filtering to images since we already filtered the volumes
+        filtered_images = all_images
         
-        # Crop all images with the common bounding box
-        cropped_images = [self.roi_selector.crop_to_bbox(img, common_bbox) for img in filtered_images]
+        # Use image 0 as a reference size
+        reference_size = filtered_images[0].shape
         
-        # Ensure all images have the same dimensions (for consistent display)
-        final_images = self.roi_selector.ensure_consistent_dimensions(cropped_images)
+        # Resize the topological graphs to match the other images
+        img_topo_graph_projected = resize(img_topo_graph_projected, reference_size, 
+                                         preserve_range=True, anti_aliasing=True)
+        img_topo_graph_concentric = resize(img_topo_graph_concentric, reference_size, 
+                                          preserve_range=True, anti_aliasing=True)
+        
+        # Add the topological graphs to the filtered images
+        filtered_images.append(img_topo_graph_projected)
+        filtered_images.append(img_topo_graph_concentric)
         
         # Create composite image
-        labels = ["Skeleton", "Branch Labels", "Object Labels", "Original", 
-                 "Depth Encoded", "Node-Edge", "Topological Graph"]
+        labels = ["Branch Labels", "Object Labels", "Original", 
+                 "Depth Encoded", "Node-Edge", "Node-Edge2", "Projected Graph", "Concentric Graph"]
         
         output_file = os.path.join(self.output_dir, "composite_view.png")
         composite_img = CompositeImageCreator.create_labeled_composite(
-            final_images, labels, layout='grid', output_file=output_file, title="Composite 3D View"
+            filtered_images, labels, layout='grid', output_file=output_file, title="Composite 3D View"
         )
         
         return output_file
     
-    def _process_timeseries(self, branch_file, original_file, node_edge_file, obj_label_file):
+    def _process_timeseries(self, skeleton_file, branch_file, original_file, node_edge_file, obj_label_file):
         """
-        Process a timeseries and create a GIF animation.
+        Process a timeseries of volumes and create a GIF.
         
         Parameters:
         -----------
+        skeleton_file : str
+            Path to the skeleton volume file
         branch_file : str
             Path to the branch volume file
         original_file : str
             Path to the original volume file
-        node_edge_file : str, optional
+        node_edge_file : str
             Path to the node-edge labeled skeleton file
-        obj_label_file : str, optional
-            Path to the object label file for coloring the node-edge skeleton
-            
+        obj_label_file : str
+            Path to the object label file
+        
         Returns:
         --------
         str
-            Path to the saved GIF file
+            Path to the output GIF file
         """
         # Load all volumes
+        skeleton_loader = VolumeLoader(skeleton_file)
         branch_loader = VolumeLoader(branch_file)
         original_loader = VolumeLoader(original_file)
         node_edge_loader = VolumeLoader(node_edge_file)
@@ -241,29 +282,22 @@ class ModularViewpointSelector:
         
         # Determine which timepoints to process
         if hasattr(self.timepoint_manager, 'selected_timepoints') and self.timepoint_manager.selected_timepoints:
-            timepoints = self.timepoint_manager.selected_timepoints
+            selected_timepoints = self.timepoint_manager.selected_timepoints
         else:
-            timepoints = range(self.volume_loader.num_timepoints)
+            selected_timepoints = range(self.volume_loader.num_timepoints)
             
-        print(f"Processing {len(timepoints)} timepoints...")
+        print(f"Processing {len(selected_timepoints)} timepoints...")
         
         # Create output directory for frames
         frames_dir = os.path.join(self.output_dir, "frames")
         os.makedirs(frames_dir, exist_ok=True)
-            
-        # Find a common bounding box for the first frame to ensure consistency across frames
-        if self.common_bbox is None and len(timepoints) > 0:
-            first_timepoint = timepoints[0]
-            # Get volume data for first timepoint
-            skeleton_data = self.volume_loader.load_volume_for_timepoint(first_timepoint)
-            img_skel = self.screenshot_manager.capture_screenshot(skeleton_data)
-            filtered_img, bbox = self.roi_selector.apply_roi_to_image(img_skel)
-            self.common_bbox = bbox
         
-        # Process each selected timepoint
+        # Process each timepoint
         frame_files = []
-        for t_idx, t in enumerate(timepoints):
-            print(f"Processing timepoint {t} ({t_idx+1}/{len(timepoints)})...")
+        padding_params = None
+        
+        for t_idx, t in enumerate(selected_timepoints):
+            print(f"Processing timepoint {t} ({t_idx+1}/{len(selected_timepoints)})...")
             
             # Skip if timepoint is out of range
             if t < 0 or t >= self.volume_loader.num_timepoints:
@@ -271,77 +305,69 @@ class ModularViewpointSelector:
                 continue
             
             # Get volume data for this timepoint
-            skeleton_data = self.volume_loader.load_volume_for_timepoint(t)
+            skeleton_data = skeleton_loader.load_volume_for_timepoint(t)
             branch_data = branch_loader.load_volume_for_timepoint(t)
             original_data = original_loader.load_volume_for_timepoint(t)
-            obj_label_data = obj_label_loader.load_volume_for_timepoint(t) if obj_label_loader else None
-            node_edge_data = node_edge_loader.load_volume_for_timepoint(t) if node_edge_loader else None
+            obj_label_data = obj_label_loader.load_volume_for_timepoint(t) 
+            node_edge_data = node_edge_loader.load_volume_for_timepoint(t) 
             
-            # Capture screenshots using the same viewpoint for all
-            img_skel = self.screenshot_manager.capture_screenshot(skeleton_data)
-            img_branch = self.screenshot_manager.capture_screenshot(branch_data, layer_type='labels')
-            img_original = self.screenshot_manager.capture_screenshot(original_data)
-            img_depth = self.screenshot_manager.generate_depth_encoded_image(skeleton_data)
+            # Apply ROI to all volumes before capturing screenshots
+            filtered_skeleton_data = self._apply_roi_to_volume(skeleton_data)
+            filtered_branch_data = self._apply_roi_to_volume(branch_data)
+            filtered_original_data = self._apply_roi_to_volume(original_data)
+            filtered_obj_label_data = self._apply_roi_to_volume(obj_label_data)
+            filtered_node_edge_data = self._apply_roi_to_volume(node_edge_data)
             
-            # Handle optional volumes
-            img_obj_label = None
-            if obj_label_data is not None:
-                img_obj_label = self.screenshot_manager.capture_screenshot(obj_label_data, layer_type='labels')
-            else:
-                img_obj_label = self.screenshot_manager.create_placeholder_image("Object Labels\nNot Available")
+            # Capture screenshots of the filtered volumes
+            img_branch = self.screenshot_manager.capture_screenshot(filtered_branch_data, layer_type='branch', timepoint=t)
+            img_original = self.screenshot_manager.capture_screenshot(filtered_original_data, layer_type='original', timepoint=t)
+            img_depth = self.screenshot_manager.generate_depth_encoded_image(filtered_skeleton_data, timepoint=t)
+            img_obj_label = self.screenshot_manager.capture_screenshot(filtered_obj_label_data, layer_type='obj_label', timepoint=t)
+            img_node_edge = self.screenshot_manager.capture_screenshot(filtered_node_edge_data, layer_type='node_edge', timepoint=t)
             
-            # Process node-edge data using the dedicated NodeEdgeProcessor
-            img_node_edge = None
-            img_topo_graph = None
-            if node_edge_data is not None:
-                # Process node-edge data and capture screenshots
-                img_node_edge = self.node_edge_processor.capture_screenshot(node_edge_data, frame_idx=t)
-                img_topo_graph = self.node_edge_processor.get_topological_graph_image(node_edge_data, frame_idx=t)
-            else:
-                img_node_edge = self.screenshot_manager.create_placeholder_image("Node-Edge\nNot Available")
-                img_topo_graph = self.screenshot_manager.create_placeholder_image("Topological Graph\nNot Available")
+            # Process node-edge data and capture screenshots for topological graphs and node-edge visualization
+            img_topo_graph_projected, img_topo_graph_concentric, img_node_edge2, _, _ = self.node_edge_processor.get_topological_graph_images(filtered_node_edge_data, frame_idx=t)
             
-            # Collect all images for consistent processing
-            all_images = [img_skel, img_branch, img_obj_label, img_original, img_depth, img_node_edge, img_topo_graph]
+            # Collect all images
+            all_images = [img_branch, img_obj_label, img_original, img_depth, img_node_edge, img_node_edge2]
             
-            # Apply ROI filtering to all images
-            filtered_images = []
-            for img in all_images:
-                filtered_img, _ = self.roi_selector.apply_roi_to_image(img)
-                filtered_images.append(filtered_img)
-            
-            # Use the common bounding box from the first frame for consistency
-            if self.common_bbox:
-                cropped_images = [self.roi_selector.crop_to_bbox(img, self.common_bbox) for img in filtered_images]
-            else:
-                # If no common bbox (shouldn't happen), use individual bboxes
-                cropped_images = []
-                for img in filtered_images:
-                    _, bbox = self.roi_selector.apply_roi_to_image(img)
-                    cropped_img = self.roi_selector.crop_to_bbox(img, bbox)
-                    cropped_images.append(cropped_img)
-            
-            # Ensure all images have the same dimensions
-            final_images = self.roi_selector.ensure_consistent_dimensions(cropped_images)
-            
+            # No need to apply ROI filtering to images since we already filtered the volumes
+            filtered_images = all_images
+
+            # Use image 0 as a reference size
+            reference_size = filtered_images[0].shape
+
+            # Resize the topological graphs to match the other images
+            img_topo_graph_projected = resize(img_topo_graph_projected, reference_size, 
+                                             preserve_range=True, anti_aliasing=True)
+            img_topo_graph_concentric = resize(img_topo_graph_concentric, reference_size, 
+                                              preserve_range=True, anti_aliasing=True)
+
+            # Add the topological graphs to the filtered images
+            filtered_images.append(img_topo_graph_projected)
+            filtered_images.append(img_topo_graph_concentric)
+
             # Create frame with all modalities arranged in a grid
-            labels = ["Skeleton", "Branch Labels", "Object Labels", "Original", 
-                     "Depth Encoded", "Node-Edge", "Topological Graph"]
+            labels = ["Original", "Object Labels", "Branch Labels", "Depth Encoded",
+                       "Node-Edge", "Node-Edge2", "Projected Graph", "Concentric Graph"]
             
-            composite_img = CompositeImageCreator.create_labeled_composite(
-                final_images, labels, layout='2x4'
+            # Check that labels and filtered_images are the same length
+            if len(labels) != len(filtered_images):
+                raise ValueError("Labels and filtered images must be the same length")
+            
+            # Create the composite image with consistent padding
+            composite_img, new_padding_params = CompositeImageCreator.create_composite_image_with_consistent_padding(
+                filtered_images, labels, layout='2x4', padding_params=padding_params, timepoint=t
             )
             
-            # Add timestamp to the composite image
-            composite_with_timestamp = self.screenshot_manager.add_timestamp(composite_img, t)
+            # Store padding parameters from the first timepoint
+            if padding_params is None:
+                padding_params = new_padding_params
+                # print("Stored padding parameters from first timepoint for consistency")
             
             # Save frame
-            frame_file = self.gif_generator.save_frame(composite_with_timestamp, t)
+            frame_file = self.gif_generator.save_frame(composite_img, t)
             frame_files.append(frame_file)
-        
-        if not frame_files:
-            print("No frames were generated. Check your timepoint selection.")
-            return None
         
         # Create GIF from frames
         gif_file = self.gif_generator.create_gif_from_files(frame_files)
@@ -372,7 +398,7 @@ def main():
                         help='Filename for output (relative to base-dir)')
     parser.add_argument('--display', action='store_true',
                         help='Display the final image after processing')
-    parser.add_argument('--timepoints', type=str, default="0,1,2",
+    parser.add_argument('--timepoints', type=str, default='0-100',
                         help='Timepoints to process (e.g., "0,5,10-20,30"). If not provided, will prompt interactively.')
     parser.add_argument('--intensity-percentile', type=int, default=50,
                         help='Percentile cutoff for intensity thresholding (0-100, default: 50). Higher values show less background.')
@@ -395,7 +421,7 @@ def main():
                                       intensity_percentile=args.intensity_percentile)
     
     # Run the workflow
-    output_file = selector.run_workflow(branch_file, original_file, 
+    output_file = selector.run_workflow(skeleton_file, branch_file, original_file, 
                                        node_edge_file=node_edge_file, 
                                        obj_label_file=obj_label_file,
                                        timepoints=args.timepoints)

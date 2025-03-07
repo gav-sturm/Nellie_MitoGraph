@@ -22,7 +22,7 @@ class ROISelector:
         """Initialize the ROISelector."""
         self.roi_polygon = None
         self.original_image_shape = None
-    
+        self.roi_mask = None
     def select_roi(self, image):
         """
         Display an image in a 2D viewer and let the user draw an ROI polygon.
@@ -44,8 +44,17 @@ class ROISelector:
         # Store the original image shape for scaling the ROI later
         self.original_image_shape = image.shape[:2]
         
+        # Handle the input image - remove alpha channel if present
+        if image.ndim == 3 and image.shape[2] == 4:
+            # Remove alpha channel
+            mip = image[..., :3]
+        else:
+            mip = image
+        
+        print(f"DEBUG: MIP shape: {mip.shape}")
+        
         viewer = napari.Viewer(ndisplay=2)
-        viewer.add_image(image, name="Image")
+        viewer.add_image(mip, name="Image")
         shapes_layer = viewer.add_shapes(name="ROI", shape_type="polygon")
         
         print("Draw an ROI on the image.")
@@ -61,12 +70,23 @@ class ROISelector:
                     print("ROI polygon completed. Closing viewer...")
                     # Store the polygon before closing
                     self.roi_polygon = shapes_layer.data[0]
+                    # print(f"DEBUG: ROI polygon shape: {self.roi_polygon.shape}")
+                    
+                    # Create a 2D mask from the polygon
+                    h, w = mip.shape[:2]
+                    roi_mask = np.zeros((h, w), dtype=bool)
+                    rr, cc = sk_polygon(self.roi_polygon[:, 0], self.roi_polygon[:, 1], shape=(h, w))
+                    roi_mask[rr, cc] = True
+                    self.roi_mask = roi_mask
+                    
+                    # print(f"DEBUG: ROI mask shape: {self.roi_mask.shape}, non-zero: {np.count_nonzero(self.roi_mask)}")
                     # Reduced delay from 0.5 to 0.2 seconds
                     threading.Timer(0.2, viewer.close).start()
         
         # Connect the callback to the data change event
         shapes_layer.events.data.connect(on_data_change)
         shapes_layer.events.mode.connect(on_data_change)
+        viewer.bind_key('r', on_data_change)
         
         # Run the viewer
         napari.run()
@@ -74,9 +94,23 @@ class ROISelector:
         # In case the user manually closed the viewer without completing a polygon
         if not self.roi_polygon and len(shapes_layer.data) > 0:
             self.roi_polygon = shapes_layer.data[0]
+            # print(f"DEBUG: ROI polygon shape (after close): {self.roi_polygon.shape}")
+            
+            # Create a 2D mask from the polygon
+            h, w = mip.shape[:2]
+            roi_mask = np.zeros((h, w), dtype=bool)
+            rr, cc = sk_polygon(self.roi_polygon[:, 0], self.roi_polygon[:, 1], shape=(h, w))
+            roi_mask[rr, cc] = True
+            self.roi_mask = roi_mask
+            
+            # print(f"DEBUG: ROI mask shape (after close): {self.roi_mask.shape}, non-zero: {np.count_nonzero(self.roi_mask)}")
             print("ROI captured.")
         elif not self.roi_polygon:
             print("No ROI drawn; using full image as ROI.")
+            # Create a full-image ROI mask
+            h, w = mip.shape[:2]
+            self.roi_mask = np.ones((h, w), dtype=bool)
+            # print(f"DEBUG: Created full-image ROI mask: {self.roi_mask.shape}")
         
         return self.roi_polygon
     
@@ -146,6 +180,9 @@ class ROISelector:
         else:
             # For grayscale images, simply apply the mask
             filtered[~mask] = 0
+
+        # crop down to the bounding box
+        filtered = self.crop_to_bbox(filtered, bbox)
         
         return filtered, bbox
     
@@ -229,3 +266,132 @@ class ROISelector:
                 resized_images.append(img)
         
         return resized_images
+    
+    def apply_roi_to_volume(self, volume_data, viewpoint_selector=None):
+        """
+        Apply the ROI to a 3D volume.
+        
+        Parameters:
+        -----------
+        volume_data : ndarray
+            3D volume data
+        viewpoint_selector : ViewpointSelector, optional
+            ViewpointSelector instance with camera parameters
+            
+        Returns:
+        --------
+        ndarray
+            Filtered volume
+        """
+        if self.roi_polygon is None or volume_data is None:
+            print("No ROI or volume data available.")
+            return volume_data
+        
+        # Get the volume shape
+        volume_shape = volume_data.shape
+        
+        # Get the camera parameters from the viewpoint selector
+        if viewpoint_selector is not None and hasattr(viewpoint_selector, 'angles') and hasattr(viewpoint_selector, 'center'):
+            angles = viewpoint_selector.angles
+            center = viewpoint_selector.center
+            print(f"DEBUG: angles tuple contains: {angles}")
+            print(f"DEBUG: center is: {center}")
+        else:
+            print("No viewpoint selector provided or missing camera parameters.")
+            # Default to a simple z-projection approach
+            return self._apply_simple_z_projection_mask(volume_data)
+        
+        # Create a 3D mask using the ROI and camera parameters
+        # We'll use a simpler approach that works with the current napari API
+        return self._apply_simple_z_projection_mask(volume_data)
+
+    def _apply_simple_z_projection_mask(self, volume_data):
+        """
+        Apply a simple z-projection mask to the volume.
+        This method extends the 2D ROI mask along the z-axis.
+        
+        Parameters:
+        -----------
+        volume_data : ndarray
+            3D volume data
+            
+        Returns:
+        --------
+        ndarray
+            Filtered volume
+        """
+        if self.roi_mask is None:
+            print("No ROI mask available.")
+            return volume_data
+        
+        # Get the volume shape
+        z_dim, y_dim, x_dim = volume_data.shape
+        
+        # We need to resize the 2D ROI mask to match the y,x dimensions of the volume
+        from skimage.transform import resize
+        
+        # Resize the ROI mask to match the volume's y,x dimensions
+        resized_mask = resize(self.roi_mask.astype(float), (y_dim, x_dim), 
+                             order=0, preserve_range=True, anti_aliasing=False).astype(bool)
+        
+        print(f"DEBUG: Original ROI mask shape: {self.roi_mask.shape}")
+        print(f"DEBUG: Resized ROI mask shape: {resized_mask.shape}")
+        print(f"DEBUG: Volume shape: {volume_data.shape}")
+        
+        # Broadcast the 2D mask to 3D
+        mask_3d = np.broadcast_to(resized_mask, volume_data.shape)
+        
+        # Apply the mask to the volume
+        filtered_volume = np.where(mask_3d, volume_data, 0)
+        
+        return filtered_volume
+
+    def resize_image(self, image, target_shape):
+        """
+        Resize a 2D image to match the target dimensions.
+        
+        Parameters:
+        -----------
+        image : ndarray
+            Image to resize (2D or 3D with channels)
+        target_shape : tuple
+            Target shape - can be (z, y, x), (y, x), or (y, x, channels)
+            Only the height and width values are used
+            
+        Returns:
+        --------
+        ndarray
+            Resized image
+        """
+        if image is None:
+            # Create a placeholder image with the target dimensions
+            if len(target_shape) == 3 and target_shape[2] <= 4:  # (h, w, channels)
+                return np.zeros(target_shape, dtype=np.uint8)
+            elif len(target_shape) == 3:  # (z, y, x)
+                return np.zeros((target_shape[1], target_shape[2], 3), dtype=np.uint8)
+            else:  # (h, w)
+                return np.zeros((*target_shape, 3), dtype=np.uint8)
+        
+        # Convert image to numpy array if needed
+        if not isinstance(image, np.ndarray):
+            image = np.array(image)
+        
+        # Extract target height and width based on the shape format
+        if len(target_shape) == 3:
+            if target_shape[2] <= 4:  # (h, w, channels)
+                target_h, target_w = target_shape[0], target_shape[1]
+            else:  # (z, y, x)
+                target_h, target_w = target_shape[1], target_shape[2]
+        else:  # (h, w)
+            target_h, target_w = target_shape
+        
+        # Print debug information
+        print(f"Resizing image from {image.shape} to ({target_h}, {target_w})")
+        
+        # Use skimage resize with anti-aliasing for better quality
+        from skimage.transform import resize
+        resized = resize(image, (target_h, target_w), 
+                       preserve_range=True, anti_aliasing=True)
+        
+        # Convert back to original dtype
+        return resized.astype(image.dtype)

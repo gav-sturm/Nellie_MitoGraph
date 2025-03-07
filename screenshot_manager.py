@@ -27,27 +27,33 @@ class ScreenshotManager:
         Parameters:
         -----------
         viewpoint_selector : ViewpointSelector
-            ViewpointSelector instance with captured view parameters
+            ViewpointSelector instance with camera parameters
         """
         self.viewpoint_selector = viewpoint_selector
+        
+        # Store cropping parameters for each image type
+        self.crop_params = {}
     
-    def capture_screenshot(self, volume, layer_type='image', wait_time=0.2, scale=1.5, intensity_percentile=50):
+    def capture_screenshot(self, volume, layer_type='image', wait_time=0.2, scale=1.5, intensity_percentile=50, timepoint=None, use_stored_crop=True):
         """
-        Open a 3D viewer for the given volume, set the camera to the captured view,
-        and capture a screenshot.
+        Capture a screenshot of the volume.
         
         Parameters:
         -----------
         volume : ndarray
-            Volume data to visualize
+            Volume data
         layer_type : str, optional
-            Type of layer to add ('image' or 'labels') (default: 'image')
+            Type of layer ('image' or 'labels') (default: 'image')
         wait_time : float, optional
             Time to wait before capturing screenshot (default: 0.2)
         scale : float, optional
-            Scale factor for the screenshot (default: 1.5)
+            Scale factor for screenshot (default: 1.5)
         intensity_percentile : int, optional
             Percentile cutoff for intensity thresholding (default: 50)
+        timepoint : int, optional
+            Current timepoint for consistent cropping (default: None)
+        use_stored_crop : bool, optional
+            Whether to use stored crop parameters (default: True)
             
         Returns:
         --------
@@ -55,6 +61,13 @@ class ScreenshotManager:
             Screenshot image
         """
         try:
+            # Create a unique image type identifier for consistent cropping
+            image_type = f"{layer_type}"
+            
+            # For the first timepoint, calculate crop parameters
+            # For subsequent timepoints, use the stored parameters
+            use_stored_params = use_stored_crop and timepoint is not None and timepoint > 0
+            
             if volume is None:
                 print("Warning: Null volume provided to capture_screenshot")
                 return self.create_placeholder_image("Volume data\nnot available")
@@ -62,7 +75,7 @@ class ScreenshotManager:
             viewer = napari.Viewer(ndisplay=3)
             
             # Use higher quality rendering for original images
-            if layer_type == 'labels':
+            if layer_type == 'obj_label' or layer_type == 'branch' or layer_type == 'node_edge':
                 viewer.add_labels(volume, name="Modality")
             else:
                 # For original images, use better rendering settings
@@ -101,12 +114,119 @@ class ScreenshotManager:
             img = viewer.screenshot(canvas_only=True, scale=scale)
             
             viewer.close()
+            
+            # Crop out black borders with consistent parameters
+            img = self._crop_black_borders(img, image_type=image_type, use_stored_params=use_stored_params)
+
+            # # debug image using debug visualizer
+            # print(f"Screenshot shape (after cropping): {img.shape}")
+            # from debug_visualizer import DebugVisualizer
+            # debug_visualizer = DebugVisualizer()
+            # debug_visualizer.visualize(img, "Screenshot", save=False, show=True)
+            
             return img
         except Exception as e:
             print(f"Error capturing screenshot: {e}")
             return self.create_placeholder_image(f"Error capturing\nscreenshot:\n{str(e)}")
     
-    def generate_depth_encoded_image(self, volume):
+    def _crop_black_borders(self, img, tolerance=10, image_type=None, use_stored_params=False):
+        """
+        Crop black borders with consistent parameters across timepoints.
+        
+        Parameters:
+        -----------
+        img : ndarray
+            Image to crop
+        tolerance : int, optional
+            Tolerance for background color detection (default: 10)
+        image_type : str, optional
+            Type of image (e.g., 'original', 'branch', 'depth') for consistent cropping
+        use_stored_params : bool, optional
+            Whether to use stored parameters for this image type (default: False)
+            
+        Returns:
+        --------
+        ndarray
+            Cropped image
+        """
+        if img is None or img.size == 0:
+            print("Warning: Empty image provided to _crop_black_borders")
+            return img
+        
+        # Save original shape for debugging
+        original_shape = img.shape
+        original_area = original_shape[0] * original_shape[1]
+        
+        # If we have stored parameters for this image type and use_stored_params is True, use them
+        if image_type and image_type in self.crop_params and use_stored_params:
+            min_row, max_row, min_col, max_col = self.crop_params[image_type]
+            # print(f"Using stored crop parameters for {image_type}: rows={min_row}:{max_row+1}, cols={min_col}:{max_col+1}")
+            
+            # Ensure the crop region is valid for this image
+            if min_row >= img.shape[0] or max_row >= img.shape[0] or min_col >= img.shape[1] or max_col >= img.shape[1]:
+                print(f"Warning: Stored crop parameters invalid for this image (shape: {img.shape}). Recalculating...")
+            else:
+                # Apply the stored crop
+                cropped = img[min_row:max_row+1, min_col:max_col+1].copy()
+                return cropped
+        
+        # We know the background color is (0, 0, 0, 255)
+        # Create a mask where pixels are not black (with tolerance)
+        if img.ndim == 3:
+            if img.shape[2] == 4:  # RGBA
+                # Check if any RGB channel is above tolerance
+                mask = np.any(img[:, :, :3] > tolerance, axis=2)
+            else:  # RGB
+                # Check if any channel is above tolerance
+                mask = np.any(img > tolerance, axis=2)
+        else:  # Grayscale
+            mask = img > tolerance
+        
+        # Find rows and columns with content
+        rows_with_content = np.any(mask, axis=1)
+        cols_with_content = np.any(mask, axis=0)
+        
+        # If no content found, return the original image
+        if not np.any(rows_with_content) or not np.any(cols_with_content):
+            print("No non-black content found in the image")
+            return img
+        
+        # Find the bounds of the content
+        row_indices = np.where(rows_with_content)[0]
+        col_indices = np.where(cols_with_content)[0]
+        
+        min_row = row_indices[0]
+        max_row = row_indices[-1]
+        min_col = col_indices[0]
+        max_col = col_indices[-1]
+        
+        # Add a margin
+        margin = 20
+        min_row = max(0, min_row - margin)
+        max_row = min(img.shape[0] - 1, max_row + margin)
+        min_col = max(0, min_col - margin)
+        max_col = min(img.shape[1] - 1, max_col + margin)
+        
+        # Ensure we have a valid crop region
+        if min_row >= max_row or min_col >= max_col:
+            print("Warning: Invalid crop region")
+            return img
+        
+        # Store the crop parameters for this image type if provided
+        if image_type:
+            self.crop_params[image_type] = (min_row, max_row, min_col, max_col)
+            #print(f"Stored crop parameters for {image_type}: rows={min_row}:{max_row+1}, cols={min_col}:{max_col+1}")
+        
+        # Apply the crop
+        cropped = img[min_row:max_row+1, min_col:max_col+1].copy()
+        
+        # Calculate crop percentage
+        cropped_area = cropped.shape[0] * cropped.shape[1]
+        crop_percentage = 100 * (1 - cropped_area / original_area)
+        
+        return cropped
+    
+    def generate_depth_encoded_image(self, volume, timepoint=None):
         """
         Generate a depth-encoded image of the volume using points colored by Z-depth.
         
@@ -114,6 +234,10 @@ class ScreenshotManager:
         -----------
         volume : ndarray
             Volume data
+        timepoint : int, optional
+            Current timepoint for consistent cropping (default: None)
+        use_stored_crop : bool, optional
+            Whether to use stored crop parameters (default: True)
             
         Returns:
         --------
@@ -124,21 +248,27 @@ class ScreenshotManager:
             if volume is None or volume.size == 0:
                 print("Warning: Empty volume provided to generate_depth_encoded_image")
                 return self.create_placeholder_image("Empty volume\nfor depth encoding")
+            
+            # For the first timepoint, calculate crop parameters
+            # For subsequent timepoints, use the stored parameters
+            use_stored_params = timepoint is not None and timepoint > 0
                 
             # First try using the 3D points approach
             try:
-                return self._generate_depth_encoded_3d(volume)
+                return self._generate_depth_encoded_3d(volume, use_stored_params=use_stored_params)
             except Exception as e:
                 print(f"Error generating 3D depth image: {e}. Trying 2D approach...")
                 
             # Fall back to 2D projection if 3D fails
             return self._create_simple_depth_image(volume)
                 
+            
+            return img_depth
         except Exception as e:
             print(f"Error generating depth encoded image: {e}")
             return self.create_placeholder_image(f"Error generating\ndepth image:\n{str(e)}")
     
-    def _generate_depth_encoded_3d(self, volume):
+    def _generate_depth_encoded_3d(self, volume, use_stored_params=False):
         """
         Generate a depth-encoded image using 3D points with colors.
         """
@@ -184,6 +314,9 @@ class ScreenshotManager:
         img_depth = viewer.screenshot(canvas_only=True, scale=1.5)
         
         viewer.close()
+
+        # Crop out black borders with consistent parameters
+        img_depth = self._crop_black_borders(img_depth, image_type="depth", use_stored_params=use_stored_params)
         
         # Check if the image is empty (all black)
         if np.mean(img_depth) < 0.01:  # Very dark image
@@ -299,57 +432,3 @@ class ScreenshotManager:
             y += line_heights[i]
         
         return np.array(img)
-    
-    @staticmethod
-    def add_timestamp(image, timepoint):
-        """
-        Add a timestamp to an image.
-        
-        Parameters:
-        -----------
-        image : ndarray
-            Image to add timestamp to
-        timepoint : int
-            Timepoint to display
-            
-        Returns:
-        --------
-        ndarray
-            Image with timestamp
-        """
-        # Convert numpy array to PIL Image
-        if isinstance(image, np.ndarray):
-            pil_image = Image.fromarray(np.uint8(image))
-        else:
-            pil_image = image
-            
-        # Create a drawing context
-        draw = ImageDraw.Draw(pil_image)
-        
-        # Try to get a font
-        try:
-            # For Windows
-            if os.name == 'nt':
-                font = ImageFont.truetype("arial.ttf", 48)
-            else:
-                # For Unix/Linux
-                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 48)
-        except IOError:
-            font = ImageFont.load_default()
-            
-        # Add timestamp text at the top center
-        text = f"Timepoint: {timepoint}"
-        text_width = draw.textlength(text, font=font)  # For PIL >= 9.2.0
-        
-        # Position text at top center
-        position = ((pil_image.width - text_width) // 2, 10)
-        
-        # Draw text with white outline for visibility
-        for offset in [(1,1), (-1,-1), (1,-1), (-1,1)]:
-            draw.text((position[0]+offset[0], position[1]+offset[1]), text, font=font, fill="white")
-        draw.text(position, text, font=font, fill="white")
-        
-        # Convert back to numpy array if needed
-        if isinstance(image, np.ndarray):
-            return np.array(pil_image)
-        return pil_image

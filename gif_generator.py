@@ -18,7 +18,7 @@ class GIFGenerator:
     with options for frame rate, loop count, and quality.
     """
     
-    def __init__(self, output_dir, frame_pattern="frame_*.png", output_file="animation.gif", frame_rate=5):
+    def __init__(self, output_dir, frame_pattern="frame_*.png", output_file="animation.gif", frame_rate=2):
         """
         Initialize the GIFGenerator.
         
@@ -97,7 +97,7 @@ class GIFGenerator:
         
         # Save as GIF with higher quality
         iio_imwrite(output_path, padded_frames, extension='.gif', plugin='pillow', 
-                   loop=0, duration=duration, optimize=False, quality=95)
+                   loop=0, duration=duration, optimize=False, quality=95, dpi=(200, 200))
         
         print(f"GIF animation saved to {output_path}")
         return output_path
@@ -138,5 +138,23 @@ class GIFGenerator:
             Path to the saved frame file
         """
         frame_file = os.path.join(self.output_dir, f"frame_{frame_idx:04d}.png")
-        imageio.imwrite(frame_file, image, quality=95)
+        imageio.imwrite(frame_file, image, quality=95, dpi=(200, 200))
         return frame_file
+    
+    # create a main fucntion to run on a folder of images
+    def main(self):
+        """
+        Main function to run the GIFGenerator.
+        """
+        # Find all PNG files in the output directory
+        frame_files = sorted(glob(os.path.join(self.output_dir, "*.png")))
+        
+        # Create the GIF
+        self.create_gif_from_files(frame_files)
+        
+        print(f"GIF animation saved to {os.path.join(self.output_dir, self.output_file)}")
+
+if __name__ == "__main__":
+    output_dir = r"/Users/gabrielsturm/Documents/GitHub/Nellie_MG/event1_2024-10-22_13-14-25_/crop1_snout/crop1_nellie_out/nellie_necessities/all_images"
+    gif_generator = GIFGenerator(output_dir=output_dir, frame_pattern="frame_*.png", output_file="animation.gif", frame_rate=2)
+    gif_generator.main()
