@@ -239,7 +239,7 @@ class CompositeImageCreator:
             
             # Add label
             draw = ImageDraw.Draw(new_img)
-            text_size = pil_img.height * 0.075
+            text_size = pil_img.height * 0.05
             font = CompositeImageCreator.get_universal_font(text_size)  # Use a larger font size
             
             # Calculate text position to center it
@@ -312,7 +312,7 @@ class CompositeImageCreator:
         text = f"Timepoint: {timepoint}"
 
         x = pil_image.width / 2 - font.getbbox(text)[2] / 2
-        y = pil_image.height * 0.025
+        y = pil_image.height * 0.05
         
         # If we got the default font and need a larger size, create a larger bitmap font
         if font == ImageFont.load_default() and font_size > 20:

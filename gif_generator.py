@@ -18,7 +18,7 @@ class GIFGenerator:
     with options for frame rate, loop count, and quality.
     """
     
-    def __init__(self, output_dir, frame_pattern="frame_*.png", output_file="animation.gif", frame_rate=2):
+    def __init__(self, output_dir, frame_pattern="frame_*.png", output_file="animation.gif", frame_rate=5):
         """
         Initialize the GIFGenerator.
         
@@ -63,6 +63,11 @@ class GIFGenerator:
         if duration is None:
             duration = 1.0 / self.frame_rate
         
+        # Ensure duration is at least 0.1 seconds for slower animations
+        duration = max(duration, 0.1)
+        
+        print(f"Using frame duration of {duration} seconds (frame rate: {1/duration} fps)")
+        
         # Load all frames
         frames = []
         for filename in frame_files:
@@ -95,9 +100,9 @@ class GIFGenerator:
         # Create output path
         output_path = os.path.join(self.output_dir, self.output_file)
         
-        # Save as GIF with higher quality
+        # Save as GIF with higher quality and explicit duration in milliseconds
         iio_imwrite(output_path, padded_frames, extension='.gif', plugin='pillow', 
-                   loop=0, duration=duration, optimize=False, quality=95, dpi=(200, 200))
+                   loop=0, duration=int(duration * 1000), optimize=False, quality=95, dpi=(200, 200))
         
         print(f"GIF animation saved to {output_path}")
         return output_path
@@ -156,5 +161,5 @@ class GIFGenerator:
 
 if __name__ == "__main__":
     output_dir = r"/Users/gabrielsturm/Documents/GitHub/Nellie_MG/event1_2024-10-22_13-14-25_/crop1_snout/crop1_nellie_out/nellie_necessities/all_images"
-    gif_generator = GIFGenerator(output_dir=output_dir, frame_pattern="frame_*.png", output_file="animation.gif", frame_rate=2)
+    gif_generator = GIFGenerator(output_dir=output_dir, frame_pattern="frame_*.png", output_file="animation.gif", frame_rate=5)
     gif_generator.main()

@@ -348,8 +348,8 @@ class ModularViewpointSelector:
             filtered_images.append(img_topo_graph_concentric)
 
             # Create frame with all modalities arranged in a grid
-            labels = ["Original", "Object Labels", "Branch Labels", "Depth Encoded",
-                       "Node-Edge", "Node-Edge2", "Projected Graph", "Concentric Graph"]
+            labels = ["Raw Intensity", "Object labels", "Branch labels", "Depth-encoded",
+                       "Node-Edge labels", "Network components", "Projected graph", "Concentric graph"]
             
             # Check that labels and filtered_images are the same length
             if len(labels) != len(filtered_images):
@@ -370,7 +370,7 @@ class ModularViewpointSelector:
             frame_files.append(frame_file)
         
         # Create GIF from frames
-        gif_file = self.gif_generator.create_gif_from_files(frame_files)
+        gif_file = self.gif_generator.create_gif_from_files(frame_files, frame_rate=5)
         
         return gif_file
 
@@ -401,7 +401,7 @@ def main():
     parser.add_argument('--timepoints', type=str, default='0-100',
                         help='Timepoints to process (e.g., "0,5,10-20,30"). If not provided, will prompt interactively.')
     parser.add_argument('--intensity-percentile', type=int, default=50,
-                        help='Percentile cutoff for intensity thresholding (0-100, default: 50). Higher values show less background.')
+                        help='Percentile cutoff for intensity thresholding (0-2, default: 50). Higher values show less background.')
     
     args = parser.parse_args()
     

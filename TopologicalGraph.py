@@ -7,6 +7,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
+import itertools
 
 class TopologicalGraph:
     def __init__(self, captured_view=None, viewport_size=None, zoom_level=None, node_tracker_manager=None):
@@ -76,7 +77,7 @@ class TopologicalGraph:
         processed = set()
         
         # Increased merging distance threshold
-        merge_distance_threshold = 5.0  # Increased from 2.0
+        merge_distance_threshold = 2.0  # Increased from 2.0
         
         for i, r1 in enumerate(regions):
             if i in processed:
@@ -377,6 +378,7 @@ class TopologicalGraph:
     def assign_component_colors(self, G):
         """
         Assign colors to components in the graph with temporal consistency.
+        Ensures no two components in the current frame have the same color.
         
         Parameters:
         -----------
@@ -408,8 +410,45 @@ class TopologicalGraph:
                 # Store component info
                 component_features.append((comp_idx, comp, centroid, size))
         
-        # Create a colormap
-        cmap = cm.get_cmap('tab20', len(component_features))
+        # Create a larger color palette by combining multiple colormaps
+        num_components = len(component_features)
+        
+        # Generate a large palette of distinct colors
+        color_palette = []
+        
+        # Add colors from tab20
+        color_palette.extend([mcolors.to_hex(c) for c in plt.cm.tab20(range(20))])
+        
+        # Add colors from tab20b
+        color_palette.extend([mcolors.to_hex(c) for c in plt.cm.tab20b(range(20))])
+        
+        # Add colors from tab20c
+        color_palette.extend([mcolors.to_hex(c) for c in plt.cm.tab20c(range(20))])
+        
+        # Add colors from Set1
+        color_palette.extend([mcolors.to_hex(c) for c in plt.cm.Set1(range(9))])
+        
+        # Add colors from Set2
+        color_palette.extend([mcolors.to_hex(c) for c in plt.cm.Set2(range(8))])
+        
+        # Add colors from Set3
+        color_palette.extend([mcolors.to_hex(c) for c in plt.cm.Set3(range(12))])
+        
+        # Add colors from Paired
+        color_palette.extend([mcolors.to_hex(c) for c in plt.cm.Paired(range(12))])
+        
+        # If we still need more colors, create variations by adjusting brightness
+        if num_components > len(color_palette):
+            base_colors = color_palette.copy()
+            for color in base_colors:
+                # Create a darker version
+                rgb = mcolors.to_rgb(color)
+                darker = tuple(max(0, c * 0.7) for c in rgb)
+                color_palette.append(mcolors.to_hex(darker))
+                
+                # Create a lighter version
+                lighter = tuple(min(1, c * 1.3) for c in rgb)
+                color_palette.append(mcolors.to_hex(lighter))
         
         # Assign colors to components with temporal consistency
         component_colors = {}
@@ -446,15 +485,42 @@ class TopologicalGraph:
                     component_colors[comp_idx] = best_match
                 else:
                     # Otherwise, assign a new color
-                    rgba = cmap(len(component_colors) % 20)
-                    hex_color = mcolors.to_hex(rgba)
-                    component_colors[comp_idx] = hex_color
+                    color_idx = len(component_colors) % len(color_palette)
+                    component_colors[comp_idx] = color_palette[color_idx]
         else:
             # First frame, just assign colors sequentially
             for i, (comp_idx, comp, centroid, size) in enumerate(component_features):
-                rgba = cmap(i % 20)
-                hex_color = mcolors.to_hex(rgba)
-                component_colors[comp_idx] = hex_color
+                color_idx = i % len(color_palette)
+                component_colors[comp_idx] = color_palette[color_idx]
+
+        # check if any 2 components have the same color
+        color_conflicts = {}
+        for comp_idx, color in component_colors.items():
+            if list(component_colors.values()).count(color) > 1:
+                if color not in color_conflicts:
+                    color_conflicts[color] = []
+                color_conflicts[color].append((comp_idx, next(size for idx, _, _, size in component_features if idx == comp_idx)))
+        
+        # Resolve color conflicts - larger components keep their color, smaller ones get new colors
+        for color, conflicts in color_conflicts.items():
+            # Sort conflicts by component size (descending)
+            conflicts.sort(key=lambda x: x[1], reverse=True)
+            
+            # Keep the color for the largest component
+            largest_comp_idx = conflicts[0][0]
+            
+            # Assign new colors to smaller components
+            for comp_idx, _ in conflicts[1:]:
+                # Find a new color that's not already used
+                for color_idx in range(len(color_palette)):
+                    candidate_color = color_palette[color_idx]
+                    if candidate_color not in component_colors.values():
+                        component_colors[comp_idx] = candidate_color
+                        break
+                else:
+                    # If we've exhausted the palette, create a random color
+                    r, g, b = np.random.random(3)
+                    component_colors[comp_idx] = mcolors.to_hex((r, g, b))
         
         # Store current components for next frame
         self.prev_components = []
@@ -1077,7 +1143,7 @@ class TopologicalGraph:
             # Calculate the center and radius of this component
             center_coords = np.array([center_pos[node] for node in center_pos])
             center = np.mean(center_coords, axis=0) if len(center_coords) > 0 else np.array([0, 0])
-            radius = max([np.linalg.norm(np.array(pos) - center) for pos in center_coords]) if len(center_coords) > 0 else 0.1
+            radius = max([np.linalg.norm(pos - center) for pos in center_coords]) if len(center_coords) > 0 else 0.1
             
             # Store the component layout
             component_layouts.append({
