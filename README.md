@@ -1,9 +1,7 @@
 # Nellie MitoGraph Visualization Tool
 
 A modular system for selecting viewpoints and creating visualizations of 3D mitochondrial volumes with multiple modalities.
-
-
-https://github.com/user-attachments/assets/28fd4899-5e17-47fd-bd35-ad6a88b33216
+![panel_800p](https://github.com/user-attachments/assets/7c2d6593-984b-4492-a79b-ab751fde1421)
 
 
 
