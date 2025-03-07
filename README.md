@@ -2,9 +2,14 @@
 
 A modular system for selecting viewpoints and creating visualizations of 3D mitochondrial volumes with multiple modalities.
 
+
+https://github.com/user-attachments/assets/28fd4899-5e17-47fd-bd35-ad6a88b33216
+
+
+
 ## Overview
 
-The Nellie MitoGraph Visualization Tool is a refactored version of the original ViewpointSelector, designed to be more maintainable, extensible, and easier to understand. It provides functionality for:
+The Nellie MitoGraph Visualization Tool is an extension of Nellie automated organell tracking specically desinged to generate topological graphs of the mitochondrial network, this pipeline can handle:
 
 1. Loading and visualizing 3D/4D volumetric data of mitochondrial networks
 2. Interactive selection of viewpoints for visualization
@@ -94,13 +99,13 @@ print(f"Output saved to: {output_file}")
 ### Single Timepoint
 
 For a single timepoint, the system will create a composite image with all modalities arranged in a grid layout, including:
-- Skeleton
+- Raw Intensity Volume
 - Branch Labels
 - Object Labels
-- Original Volume
 - Depth-Encoded View
-- Node-Edge View
-- Topological Graph
+- Node-Edge Network View
+- Projected Topological Graph
+- Cocentric Topological Graph
 
 ### Timeseries
 
@@ -118,14 +123,15 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ### Single Timepoint
 
 For a single timepoint, the system will create a composite image with all modalities arranged in a grid layout, including:
-- Skeleton
+- Raw Intensity Volume
 - Branch Labels
 - Object Labels
-- Original Volume
 - Depth-Encoded View
-- Node-Edge View
-- Topological Graph
+- Node-Edge Network View
+- Projected Topological Graph
+- Cocentric Topological Graph
 
+  
 ### Timeseries
 
 For a timeseries, the system will create a GIF animation showing the composite views for each selected timepoint, with a timestamp indicating the current timepoint.
